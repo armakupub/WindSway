@@ -25,7 +25,7 @@ Source is MIT-licensed. Forks and improvements are welcome and encouraged.
 ## Installation
 
 1. Subscribe to **[ZombieBuddy](https://steamcommunity.com/sharedfiles/filedetails/?id=3619862853)** on the Steam Workshop and follow its one-time setup instructions. This step is only needed once: all mods that depend on ZombieBuddy work automatically afterwards.
-2. Subscribe to **Wind Sway**.
+2. Subscribe to **[Wind Sway](https://steamcommunity.com/sharedfiles/filedetails/?id=3782670683)**.
 3. Enable both mods in the in-game mod list and launch the game.
 
 Because Wind Sway ships a Java JAR, the **first** time you launch the game after installing it, ZombieBuddy will show a native approval dialog with the mod name and an `updated` date. Tick `Allow` to approve this specific JAR. A persist-decision checkbox at the bottom saves your choice for future updates.
@@ -73,6 +73,7 @@ Then `./build.sh` compiles, packages `windsway.jar`, and installs to `%USERPROFI
 ## Links
 
 - **GitHub:** https://github.com/armakupub/WindSway
+- **Steam Workshop:** https://steamcommunity.com/sharedfiles/filedetails/?id=3782670683
 - **Teaser video:** https://www.youtube.com/watch?v=zXTunrHDK6w
 
 ## Attribution

@@ -1,4 +1,5 @@
 version=1
+id=3782670683
 title=[B42] Wind Sway
 description=[h1]What it does[/h1]
 description=
@@ -44,5 +45,7 @@ description=The idea comes from [url=https://steamcommunity.com/sharedfiles/file
 description=
 description=[hr][/hr]
 description=
+description=Workshop ID: 3782670683
 description=Mod ID: WindSway
+tags=Build 42;Realistic;WIP
 visibility=public
