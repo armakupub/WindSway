@@ -1,0 +1,12 @@
+# Per-machine build configuration. Copy to build.local (gitignored) and edit.
+
+# Project Zomboid install directory — must contain projectzomboid.jar
+# and ZombieBuddy.jar.
+PZ_DIR="C:/Games/Steam/steamapps/common/ProjectZomboid"
+
+# JDK with javac/jar (any JDK 17+).
+JDK_DIR="C:/Program Files/Zulu/zulu-25"
+
+# Where to install the built mod for local testing. Defaults to
+# "$USERPROFILE/Zomboid/mods/WindSway" if not set.
+# MOD_INSTALL_ROOT="$USERPROFILE/Zomboid/mods/WindSway"
