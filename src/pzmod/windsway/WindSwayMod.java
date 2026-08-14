@@ -23,6 +23,8 @@ import zombie.iso.SpriteDetails.IsoFlagType;
 import zombie.iso.fboRenderChunk.FBORenderCell;
 import zombie.iso.fboRenderChunk.FBORenderChunk;
 import zombie.iso.fboRenderChunk.FBORenderObjectHighlight;
+import zombie.iso.fboRenderChunk.FBORenderObjectOutline;
+import zombie.iso.fboRenderChunk.ObjectRenderInfo;
 import zombie.iso.objects.IsoBarbecue;
 import zombie.iso.objects.IsoCarBatteryCharger;
 import zombie.iso.objects.IsoFire;
@@ -36,6 +38,7 @@ import zombie.iso.objects.ObjectRenderEffects;
 import zombie.iso.sprite.IsoSprite;
 import zombie.iso.sprite.IsoSpriteInstance;
 import zombie.iso.weather.ClimateManager;
+import zombie.iso.weather.fx.WeatherFxMask;
 import zombie.tileDepth.TileDepthMapManager;
 import zombie.tileDepth.TileDepthTexture;
 import zombie.tileDepth.TileDepthTextureManager;
@@ -569,6 +572,9 @@ public class WindSwayMod {
             baseSy -= offsetYParam;
             baseSx += -IsoCamera.frameState.offX;
             baseSy += -IsoCamera.frameState.offY;
+            // Picker anchor: vanilla sx - offX, no jiggly term.
+            float pickerX = baseSx;
+            float pickerY = baseSy;
             float zoom = IsoCamera.frameState.zoom;
             baseSx += camera.fixJigglyModelsX * zoom;
             baseSy += camera.fixJigglyModelsY * zoom;
@@ -733,6 +739,20 @@ public class WindSwayMod {
             pendingQuads.addAll(parts);
             for (int i = 0; i < parts.size(); ++i) {
                 extendPendingBounds(parts.get(i));
+            }
+            // Object-picker click boxes; normally refilled by the draw
+            // we skip.
+            if (!WeatherFxMask.isRenderingMask()
+                    && !FBORenderObjectHighlight.getInstance().isRendering()
+                    && !FBORenderObjectOutline.getInstance().isRendering()) {
+                ObjectRenderInfo ri = object.getRenderInfo(playerIndex);
+                ri.renderX = pickerX;
+                ri.renderY = pickerY;
+                ri.renderWidth = wOrig * scaleX;
+                ri.renderHeight = hOrig * scaleY;
+                ri.renderScaleX = scaleX;
+                ri.renderScaleY = scaleY;
+                ri.renderAlpha = alpha;
             }
             // Vanilla advances attachment anims inside the skipped draw.
             for (int i = 0; i < attachedCount; ++i) {
