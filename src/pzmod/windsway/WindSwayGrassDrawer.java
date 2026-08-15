@@ -211,7 +211,18 @@ public class WindSwayGrassDrawer extends TextureDraw.GenericDrawer {
                 Seg s = segs.get(i);
                 if (s.depth != curDepth) {
                     GL13.glActiveTexture(GL13.GL_TEXTURE1);
-                    s.depth.bind();
+                    // Raw bind like the RingBuffer's texture1 path: TextureID.bind()
+                    // re-applies the TextureID's LINEAR default filters and turns the
+                    // engine's NEAREST depth maps bilinear for the whole session
+                    // (silhouette texels land nearer, edges leak through walls).
+                    int depthId = s.depth.getID();
+                    if (depthId == -1) {
+                        s.depth.bind();
+                    } else {
+                        GL11.glBindTexture(GL11.GL_TEXTURE_2D, depthId);
+                    }
+                    GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MIN_FILTER, GL11.GL_NEAREST);
+                    GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MAG_FILTER, GL11.GL_NEAREST);
                     GL13.glActiveTexture(GL13.GL_TEXTURE0);
                     curDepth = s.depth;
                 }

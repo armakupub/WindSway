@@ -1,6 +1,10 @@
 Wind Sway - Changelog
 =====================
 
+0.1.2 - 2026-08-15
+  - Fixed: thin edges of indoor furniture showed through exterior walls.
+    Thanks to @Ismællö for the report and the recordings!
+
 0.1.1 - 2026-08-14
   - Fixed: containers and other objects could not be clicked.
 
