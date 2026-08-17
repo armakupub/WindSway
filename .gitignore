@@ -6,6 +6,7 @@ build.local
 
 # Local-only working notes and material
 STEAM_COMMENT_TEASER.md
+docs/
 videos/
 *.mp4
 debug_img/

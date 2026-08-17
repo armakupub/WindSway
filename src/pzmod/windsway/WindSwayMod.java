@@ -1,11 +1,15 @@
 package pzmod.windsway;
 
+import java.lang.reflect.Field;
 import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.Map;
 
+import me.zed_0xff.zombie_buddy.Accessor;
 import me.zed_0xff.zombie_buddy.Exposer;
 
 import zombie.GameTime;
-import zombie.IndieGL;
 import zombie.core.Core;
 import zombie.core.SpriteRenderer;
 import zombie.core.math.PZMath;
@@ -21,6 +25,7 @@ import zombie.characters.IsoGameCharacter;
 import zombie.iso.PlayerCamera;
 import zombie.iso.SpriteDetails.IsoFlagType;
 import zombie.iso.fboRenderChunk.FBORenderCell;
+import zombie.iso.fboRenderChunk.FBORenderTrees;
 import zombie.iso.fboRenderChunk.FBORenderChunk;
 import zombie.iso.fboRenderChunk.FBORenderObjectHighlight;
 import zombie.iso.fboRenderChunk.FBORenderObjectOutline;
@@ -35,6 +40,7 @@ import zombie.iso.objects.IsoTree;
 import zombie.iso.objects.IsoWorldInventoryObject;
 import zombie.iso.objects.IsoZombieGiblets;
 import zombie.iso.objects.ObjectRenderEffects;
+import zombie.iso.objects.RenderEffectType;
 import zombie.iso.sprite.IsoSprite;
 import zombie.iso.sprite.IsoSpriteInstance;
 import zombie.iso.weather.ClimateManager;
@@ -43,10 +49,10 @@ import zombie.tileDepth.TileDepthMapManager;
 import zombie.tileDepth.TileDepthTexture;
 import zombie.tileDepth.TileDepthTextureManager;
 
-// Registered as the Kahlua global "WindSwayMod" (simple class name).
+// Kahlua global "WindSwayMod" (simple class name); console calls need
+// the prefix.
 @Exposer.LuaClass
 public class WindSwayMod {
-    public static final WindSwayMod instance = new WindSwayMod();
 
     public static volatile boolean enabled = true;
 
@@ -54,83 +60,196 @@ public class WindSwayMod {
         enabled = v;
     }
 
-    // Remap base for getWindTickFinal (Patch_ClimateManager): vanilla
-    // wind sits near zero for hours on calm days, stilling all plant sway.
+    // The two option sliders: remap bases for the plant channel
+    // (getWindTickFinal, Patch_ClimateManager) and the tree channel
+    // (TreeSway). Vanilla wind sits near zero for hours on calm days.
     public static volatile double windFloor = 0.1;
 
     public static void setWindFloor(double v) {
         windFloor = v;
     }
 
-    // Separate remap base for tree pools (Patch_ObjectRenderEffects) so
-    // crown and ground sway stay tunable apart.
     public static volatile double treeWindFloor = 0.1;
 
     public static void setTreeWindFloor(double v) {
         treeWindFloor = v;
     }
 
-    private static boolean treeSplitOk = true;
-    private static java.lang.reflect.Field isTreeField;
-    private static java.lang.reflect.Field windTypeField;
-    private static java.lang.reflect.Field rawWindTickField;
-    public static volatile double lastTreeWind = -1.0;
+    // Console tuning hooks.
+    public static void setTreeWarp(boolean v) {
+        TreeRenderer.warp = v;
+    }
 
-    // Runs per pool update (~90x/frame) inside woven advice; must not
-    // throw or the render loop dies.
-    public static float treePoolWind(Object pool, float wind) {
-        if (!enabled || !treeSplitOk) return wind;
-        try {
-            java.lang.reflect.Field treeF = isTreeField;
-            if (treeF == null) {
-                treeF = me.zed_0xff.zombie_buddy.Accessor.findField(
-                        zombie.iso.objects.ObjectRenderEffects.class, "isTree");
-                java.lang.reflect.Field typeF = me.zed_0xff.zombie_buddy.Accessor.findField(
-                        zombie.iso.objects.ObjectRenderEffects.class, "windType");
-                java.lang.reflect.Field rawF = me.zed_0xff.zombie_buddy.Accessor.findField(
-                        ClimateManager.class, "windTickFinal");
-                if (treeF == null || typeF == null || rawF == null) {
-                    throw new NoSuchFieldException("isTree/windType/windTickFinal");
-                }
-                treeF.setAccessible(true);
-                typeF.setAccessible(true);
-                rawF.setAccessible(true);
-                rawWindTickField = rawF;
-                windTypeField = typeF;
-                isTreeField = treeF;
-            }
-            if (!treeF.getBoolean(pool)) return wind;
-            // Same linear squeeze as the plant channel, but from the raw
-            // (unpatched) field so the plant remap never stacks on top.
-            double floor = treeWindFloor;
-            double raw = rawWindTickField.getDouble(null);
-            float tree = floor > 0.0 ? (float) (floor + (1.0 - floor) * raw) : (float) raw;
-            lastTreeWind = tree;
-            // Each pool type gates at its own threshold (0.08/0.15/0.3);
-            // pre-distort the input so every type normalizes like type 1:
-            // shared onset, unchanged skew ratio at saturation.
-            int wt = windTypeField.getInt(pool);
-            if (wt == 2 || wt == 3) {
-                float n = tree <= 0.08f ? 0.0f : (tree - 0.08f) / 0.92f;
-                if (n > 1.0f) n = 1.0f;
-                tree = wt == 2 ? 0.15f + n * 0.85f : 0.3f + n * 0.7f;
-            }
-            return tree;
-        } catch (Throwable t) {
-            treeSplitOk = false;
-            System.out.println("[WindSway] tree wind split disabled, trees follow plant wind: " + t);
-            return wind;
+    public static void setTreeSharp(double v) {
+        TreeRenderer.sharp = v;
+    }
+
+    public static void setTreeTrunk(double v) {
+        TreeRenderer.trunkFactor = v;
+    }
+
+    public static void setTreeBend(double pow, double powStorm, double trunkStorm) {
+        TreeRenderer.bendPow = pow;
+        TreeRenderer.bendPowStorm = powStorm;
+        TreeRenderer.trunkStorm = trunkStorm;
+    }
+
+    public static void setTreeHeightPow(double v) {
+        TreeRenderer.heightPow = v;
+    }
+
+    public static void setTreeLeaf(double ampPx, double hz, double cellPx) {
+        TreeRenderer.leafAmp = ampPx;
+        TreeRenderer.leafHz = hz;
+        TreeRenderer.leafCell = cellPx;
+    }
+
+    public static void setTreeLeafStorm(double ampPx, double hz) {
+        TreeRenderer.leafAmpStorm = ampPx;
+        TreeRenderer.leafHzStorm = hz;
+    }
+
+    public static void setTreeLeafSize(double refH, double pow) {
+        TreeRenderer.leafRefH = refH;
+        TreeRenderer.leafSizePow = pow;
+    }
+
+    public static void setTreeBranch(double floorPx, double fracOfLean, double maxPx, double hz) {
+        TreeRenderer.branchFloor = floorPx;
+        TreeRenderer.branchFrac = fracOfLean;
+        TreeRenderer.branchMax = maxPx;
+        TreeRenderer.branchHz = hz;
+    }
+
+    public static void setTreeBranchStorm(double px, double hz) {
+        TreeRenderer.branchStorm = px;
+        TreeRenderer.branchHzStorm = hz;
+    }
+
+    public static void setTreeBranchCell(double fracOfWidth, double minPx) {
+        TreeRenderer.branchCellFrac = fracOfWidth;
+        TreeRenderer.branchCellMin = minPx;
+    }
+
+    public static void setTreeCrown(double knee, double lobeYFrac) {
+        TreeRenderer.crownKnee = knee;
+        TreeRenderer.branchYFrac = lobeYFrac;
+    }
+
+    public static void setTreeSway(double ampMax, double ampPow) {
+        TreeSway.ampMax = ampMax;
+        TreeSway.ampPow = ampPow;
+    }
+
+    public static void setBushSway(double ampMax, double pow, double periodSeconds) {
+        TreeSway.bushAmpMax = ampMax;
+        TreeSway.bushAmpPow = pow;
+        TreeSway.bushPeriod = periodSeconds;
+    }
+
+    public static void setPlantSway(double ampMax, double pow, double periodSeconds) {
+        TreeSway.plantAmpMax = ampMax;
+        TreeSway.plantAmpPow = pow;
+        TreeSway.plantPeriod = periodSeconds;
+    }
+
+    public static void setPlantStiffness(double type2, double type3) {
+        TreeSway.plantStiff2 = type2;
+        TreeSway.plantStiff3 = type3;
+    }
+
+    public static void setTreeStormSway(double onset, double gain, double hold) {
+        TreeSway.stormOnset = onset;
+        TreeSway.stormGain = gain;
+        TreeSway.stormHold = hold;
+    }
+
+    public static void setTreePeriod(double seconds, double spread, double stormSpeedup) {
+        TreeSway.periodBase = seconds;
+        TreeSway.periodSpread = spread;
+        TreeSway.stormSpeedup = stormSpeedup;
+    }
+
+    public static void setTreeGust(double gain, double lengthTiles, double speed, double speedWind) {
+        TreeSway.gustGain = gain;
+        TreeSway.gustLength = lengthTiles;
+        TreeSway.gustSpeed = speed;
+        TreeSway.gustSpeedWind = speedWind;
+    }
+
+    public static void setTreeDir(double smoothSeconds) {
+        TreeSway.dirSmooth = smoothSeconds;
+    }
+
+    public static void setTreeTempo(double calm, double storm) {
+        TreeSway.tempoCalm = calm;
+        TreeSway.tempoStorm = storm;
+    }
+
+    public static void setTreeSwayTempo(double calm, double storm) {
+        TreeSway.swayTempoCalm = calm;
+        TreeSway.swayTempoStorm = storm;
+    }
+
+    public static void setTreeTime(double scale) {
+        TreeSway.timeScale = scale;
+    }
+
+    public static void setTreeStorm(double v) {
+        TreeSway.storm = v;
+    }
+
+    public static void setTreeGiant(double boost, double onset, double full) {
+        TreeRenderer.giantBoost = boost;
+        TreeRenderer.giantOnset = onset;
+        TreeRenderer.giantFull = full;
+    }
+
+    public static void setTreeConifer(double leafAmp, double leafHz, double lobeAmp) {
+        TreeRenderer.coniferLeafAmp = leafAmp;
+        TreeRenderer.coniferLeafHz = leafHz;
+        TreeRenderer.coniferLobeAmp = lobeAmp;
+    }
+
+    public static void setTreeConiferShape(double leanFactor, double start, double bendPow) {
+        TreeRenderer.coniferLean = leanFactor;
+        TreeRenderer.coniferStart = start;
+        TreeRenderer.coniferBendPow = bendPow;
+    }
+
+    public static void setTreeJitter(double v) {
+        TreeRenderer.treeJitter = v;
+    }
+
+    public static void setTreeLayers(boolean main, boolean branch, boolean leaf) {
+        TreeRenderer.mainOn = main;
+        TreeRenderer.branchOn = branch;
+        TreeRenderer.leafOn = leaf;
+    }
+
+    private static Field rawWindTickField;
+
+    // The unpatched wind value; the getter carries the plant remap and
+    // must never stack under the tree channel.
+    static double rawWindTick() throws Exception {
+        Field f = rawWindTickField;
+        if (f == null) {
+            f = Accessor.findField(ClimateManager.class, "windTickFinal");
+            if (f == null) throw new NoSuchFieldException("windTickFinal");
+            f.setAccessible(true);
+            rawWindTickField = f;
         }
+        return f.getDouble(null);
     }
 
     private static boolean rustleOk = true;
-    private static java.lang.reflect.Field rrField;
-    private static java.lang.reflect.Field rrTypeField;
-    private static java.lang.reflect.Field rrTargetField;
-    private static java.lang.reflect.Field treePoolsField;
-    private static java.lang.reflect.Field dynFxField;
-    private static java.lang.reflect.Field oreTypeField;
-    private static java.lang.reflect.Field oreParentField;
+    private static Field rrField;
+    private static Field rrTypeField;
+    private static Field rrTargetField;
+    private static Field treePoolsField;
+    private static Field dynFxField;
+    private static Field oreTypeField;
+    private static Field oreParentField;
     public static volatile double lastRustleGain = 1.0;
 
     // Rustle feedback is authored for static flora; layered on ambient
@@ -147,28 +266,13 @@ public class WindSwayMod {
         if (!enabled || !rustleOk) return;
         try {
             if (rrField == null) {
-                java.lang.reflect.Field rawF = rawWindTickField;
-                if (rawF == null) {
-                    rawF = me.zed_0xff.zombie_buddy.Accessor.findField(
-                            ClimateManager.class, "windTickFinal");
-                    if (rawF == null) throw new NoSuchFieldException("windTickFinal");
-                    rawF.setAccessible(true);
-                    rawWindTickField = rawF;
-                }
-                java.lang.reflect.Field rr = me.zed_0xff.zombie_buddy.Accessor.findField(
-                        ObjectRenderEffects.class, "randomRustle");
-                java.lang.reflect.Field rrType = me.zed_0xff.zombie_buddy.Accessor.findField(
-                        ObjectRenderEffects.class, "randomRustleType");
-                java.lang.reflect.Field rrTarget = me.zed_0xff.zombie_buddy.Accessor.findField(
-                        ObjectRenderEffects.class, "randomRustleTarget");
-                java.lang.reflect.Field pools = me.zed_0xff.zombie_buddy.Accessor.findField(
-                        ObjectRenderEffects.class, "WIND_EFFECTS_TREES");
-                java.lang.reflect.Field dyn = me.zed_0xff.zombie_buddy.Accessor.findField(
-                        ObjectRenderEffects.class, "DYNAMIC_EFFECTS");
-                java.lang.reflect.Field type = me.zed_0xff.zombie_buddy.Accessor.findField(
-                        ObjectRenderEffects.class, "type");
-                java.lang.reflect.Field parent = me.zed_0xff.zombie_buddy.Accessor.findField(
-                        ObjectRenderEffects.class, "parent");
+                Field rr = Accessor.findField(ObjectRenderEffects.class, "randomRustle");
+                Field rrType = Accessor.findField(ObjectRenderEffects.class, "randomRustleType");
+                Field rrTarget = Accessor.findField(ObjectRenderEffects.class, "randomRustleTarget");
+                Field pools = Accessor.findField(ObjectRenderEffects.class, "WIND_EFFECTS_TREES");
+                Field dyn = Accessor.findField(ObjectRenderEffects.class, "DYNAMIC_EFFECTS");
+                Field type = Accessor.findField(ObjectRenderEffects.class, "type");
+                Field parent = Accessor.findField(ObjectRenderEffects.class, "parent");
                 if (rr == null || rrType == null || rrTarget == null || pools == null
                         || dyn == null || type == null || parent == null) {
                     throw new NoSuchFieldException("randomRustle/DYNAMIC_EFFECTS/type/parent");
@@ -188,7 +292,7 @@ public class WindSwayMod {
                 oreParentField = parent;
                 rrField = rr;
             }
-            double raw = rawWindTickField.getDouble(null);
+            double raw = rawWindTick();
             double tf = treeWindFloor;
             double pf = windFloor;
             double treeCh = tf > 0.0 ? tf + (1.0 - tf) * raw : raw;
@@ -219,7 +323,7 @@ public class WindSwayMod {
             ArrayList<?> dyn = (ArrayList<?>) dynFxField.get(null);
             for (int idx = 0; idx < dyn.size(); ++idx) {
                 ObjectRenderEffects e = (ObjectRenderEffects) dyn.get(idx);
-                if (oreTypeField.get(e) != zombie.iso.objects.RenderEffectType.Vegetation_Rustle) continue;
+                if (oreTypeField.get(e) != RenderEffectType.Vegetation_Rustle) continue;
                 Object parentObj = oreParentField.get(e);
                 if (!(parentObj instanceof IsoObject)) continue;
                 IsoObject parent = (IsoObject) parentObj;
@@ -261,8 +365,20 @@ public class WindSwayMod {
     private static ObjectRenderEffects treeOreScratch;
     private static boolean firstTreeScaleLogged = false;
 
-    // Runs once per visible tree per frame from woven advice; must not
-    // throw.
+    private static ObjectRenderEffects poolOf(ObjectRenderEffects ore) throws Exception {
+        if (TreeSway.isTreePool(ore)) return ore;
+        Field parent = oreParentField;
+        if (parent == null) {
+            parent = Accessor.findField(ObjectRenderEffects.class, "parent");
+            if (parent == null) throw new NoSuchFieldException("parent");
+            parent.setAccessible(true);
+            oreParentField = parent;
+        }
+        Object p = parent.get(ore);
+        return p instanceof IsoObject ? ((IsoObject) p).getWindRenderEffects() : null;
+    }
+
+    // Once per visible tree per frame from woven advice; must not throw.
     public static ObjectRenderEffects scaleTreeOre(Texture texture, Texture texture2, ObjectRenderEffects ore) {
         if (ore == null || !enabled || !treeOreScaleOk) return ore;
         try {
@@ -278,24 +394,35 @@ public class WindSwayMod {
             } else if (w == FBORenderChunk.JUMBO_L_WIDTH) {
                 f = 3.0;
             } else {
-                return ore;
+                f = 1.0;
             }
+            // While the tree renderer draws, the shared pool sway is
+            // replaced by the per-tree field; only per-object effects
+            // (axe shudder) travel through the ORE.
+            ObjectRenderEffects pool = TreeRenderer.active() ? poolOf(ore) : null;
+            if (pool == ore) return null;
+            if (pool == null && f == 1.0) return ore;
             ObjectRenderEffects scratch = treeOreScratch;
             if (scratch == null) {
                 scratch = ObjectRenderEffects.alloc();
                 treeOreScratch = scratch;
             }
-            scratch.x1 = ore.x1 * f;
-            scratch.y1 = ore.y1 * f;
-            scratch.x2 = ore.x2 * f;
-            scratch.y2 = ore.y2 * f;
-            scratch.x3 = ore.x3 * f;
-            scratch.y3 = ore.y3 * f;
-            scratch.x4 = ore.x4 * f;
-            scratch.y4 = ore.y4 * f;
+            double px1 = 0.0, py1 = 0.0, px2 = 0.0, py2 = 0.0, px3 = 0.0, py3 = 0.0, px4 = 0.0, py4 = 0.0;
+            if (pool != null) {
+                px1 = pool.x1; py1 = pool.y1; px2 = pool.x2; py2 = pool.y2;
+                px3 = pool.x3; py3 = pool.y3; px4 = pool.x4; py4 = pool.y4;
+            }
+            scratch.x1 = (ore.x1 - px1) * f;
+            scratch.y1 = (ore.y1 - py1) * f;
+            scratch.x2 = (ore.x2 - px2) * f;
+            scratch.y2 = (ore.y2 - py2) * f;
+            scratch.x3 = (ore.x3 - px3) * f;
+            scratch.y3 = (ore.y3 - py3) * f;
+            scratch.x4 = (ore.x4 - px4) * f;
+            scratch.y4 = (ore.y4 - py4) * f;
             if (!firstTreeScaleLogged) {
                 firstTreeScaleLogged = true;
-                trace("first jumbo ORE scaled x" + (int) f + " (texW=" + w + ")");
+                trace("first tree ORE rewritten, scale x" + (int) f + " (texW=" + w + ")");
             }
             return scratch;
         } catch (Throwable t) {
@@ -305,8 +432,7 @@ public class WindSwayMod {
         }
     }
 
-    // Debug: tint every batch quad red to tell batch output from vanilla
-    // draws.
+    // Debug: tint batch quads red.
     public static volatile boolean debugTint = false;
 
     public static void setDebugTint(boolean v) {
@@ -331,9 +457,9 @@ public class WindSwayMod {
     private static int diagAlphaSkips = 0;
 
     // Diagnostic: counts and names objects handed back to vanilla.
-    private static final java.util.HashMap<String, Integer> rejectCounts = new java.util.HashMap<>();
-    private static final java.util.ArrayList<String> rejectSeen = new java.util.ArrayList<>();
-    private static final java.util.HashSet<String> rejectSeenSet = new java.util.HashSet<>();
+    private static final HashMap<String, Integer> rejectCounts = new HashMap<>();
+    private static final ArrayList<String> rejectSeen = new ArrayList<>();
+    private static final HashSet<String> rejectSeenSet = new HashSet<>();
     private static int rejectSeenPrinted = 0;
 
     private static boolean reject(String reason, IsoSprite sprite) {
@@ -348,12 +474,11 @@ public class WindSwayMod {
         return false;
     }
 
-    // Batch order = capture order = vanilla paint order. Against no-depth-
-    // write translucents (fences, doors, handed-back objects) ordering is
-    // kept by flushing before any such draw that can overlap the pending
-    // bounds. Depth cannot replace paint order here: neighboring squares'
-    // [zNear,zFar] ranges overlap, blade depth interleaves across squares
-    // in both directions.
+    // Batch order = capture order = vanilla paint order; against no-depth-
+    // write translucents (fences, doors, handed-back objects) it is kept by
+    // flushing before any such draw that can overlap the pending bounds.
+    // Depth cannot stand in for paint order: neighbouring squares'
+    // [zNear,zFar] ranges overlap and blade depth interleaves across them.
     private static boolean pendBoundsValid = false;
     private static float pendMinX;
     private static float pendMinY;
@@ -372,10 +497,11 @@ public class WindSwayMod {
     // Diagnostic: flush causes for the 5s log.
     private static int flushDoor5s = 0;
     private static int flushObj5s = 0;
+    private static int flushTree5s = 0;
     private static int flushPass5s = 0;
     private static int gateSkip5s = 0;
-    private static final java.util.ArrayList<String> flushSeen = new java.util.ArrayList<>();
-    private static final java.util.HashSet<String> flushSeenSet = new java.util.HashSet<>();
+    private static final ArrayList<String> flushSeen = new ArrayList<>();
+    private static final HashSet<String> flushSeenSet = new HashSet<>();
     private static int flushSeenPrinted = 0;
 
     private static void noteFlushTrigger(IsoObject object, boolean doorOrWall) {
@@ -462,6 +588,23 @@ public class WindSwayMod {
         }
     }
 
+    // Trees write depth even where they draw see-through (stencil hole,
+    // fade, cutaway); grass captured before such a tree has to be queued
+    // ahead of it, as vanilla's paint order would. Opaque lists need no
+    // flush: depth culling under an opaque crown equals being painted over.
+    public static void onTreeListDraw(Object drawer) {
+        try {
+            if (pendingQuads.isEmpty()) return;
+            if (!(drawer instanceof FBORenderTrees)) return;
+            if (!FBORenderCell.instance.renderTranslucentOnly) return;
+            if (!TreeRenderer.hasSeeThrough((FBORenderTrees) drawer)) return;
+            if (debugLog) flushTree5s++;
+            flushPending();
+        } catch (Throwable t) {
+            flushPending();
+        }
+    }
+
     // skipOn advice (Patch_FBORenderCell): true = engine skips the
     // object's own draw. renderTranslucent computed targetAlpha before us.
     public static boolean tryCaptureGrass(IsoObject object) {
@@ -477,10 +620,10 @@ public class WindSwayMod {
         try {
             if (!FBORenderCell.instance.renderTranslucentOnly) return false;
             if (!Core.getInstance().getOptionDoWindSpriteEffects()) return false;
-            // setupTileDepth's special-object list: chunk depth or own
-            // shader in vanilla. Everything else on this path is a
-            // tile-depth quad in vanilla too — capturing non-wind objects
-            // as well keeps a field one pipeline instead of a flush storm.
+            // setupTileDepth's special-object list (chunk depth or own
+            // shader). Everything else on this path is a tile-depth quad;
+            // capturing non-wind objects too keeps a field one pipeline
+            // instead of a flush storm.
             if (object instanceof IsoTree || object instanceof IsoGameCharacter
                     || object instanceof IsoFire || object instanceof IsoFireplace
                     || object instanceof IsoWorldInventoryObject
@@ -732,7 +875,7 @@ public class WindSwayMod {
                 pendBoundsValid = false;
                 if (!captureFailedLogged) {
                     captureFailedLogged = true;
-                    trace("pendingQuads overflow — pass advice not running? batch disabled this session");
+                    trace("pendingQuads overflow, pass advice not running? batch disabled this session");
                 }
                 return false;
             }
@@ -770,7 +913,7 @@ public class WindSwayMod {
         } catch (Throwable t) {
             if (!captureFailedLogged) {
                 captureFailedLogged = true;
-                trace("grass capture failed — falling back to vanilla draw", t);
+                trace("grass capture failed, falling back to vanilla draw", t);
             }
             return false;
         }
@@ -917,12 +1060,19 @@ public class WindSwayMod {
             long now = System.currentTimeMillis();
             if (debugLog && now - lastWindLog > 5000L) {
                 lastWindLog = now;
-                trace(String.format("windTickFinal=%.3f treeWind=%.3f rustleG=%.2f | flushes=%d quads=%d maxBatch=%d | alphaskip=%d",
-                        ClimateManager.getWindTickFinal(), lastTreeWind, lastRustleGain, flushCount5s, flushQuads5s, maxBatch5s, diagAlphaSkips));
-                trace(String.format("flush causes: door=%d obj=%d passEnd=%d | gateSkips=%d",
-                        flushDoor5s, flushObj5s, flushPass5s, gateSkip5s));
+                trace(String.format("plantWind=%.3f raw=%.3f treeW=%.3f dir=%.2f poolX=%.3f rustleG=%.2f | flushes=%d quads=%d maxBatch=%d | alphaskip=%d",
+                        ClimateManager.getWindTickFinal(), TreeSway.raw, TreeSway.w, TreeSway.dir, TreeSway.lastX, lastRustleGain, flushCount5s, flushQuads5s, maxBatch5s, diagAlphaSkips));
+                trace(String.format("flush causes: door=%d obj=%d tree=%d passEnd=%d | gateSkips=%d",
+                        flushDoor5s, flushObj5s, flushTree5s, flushPass5s, gateSkip5s));
+                trace(String.format("trees: lists=%d trees=%d draws=%d maxList=%d",
+                        TreeRenderer.diagRenders, TreeRenderer.diagTrees, TreeRenderer.diagDraws, TreeRenderer.diagMaxTrees));
+                TreeRenderer.diagRenders = 0;
+                TreeRenderer.diagTrees = 0;
+                TreeRenderer.diagDraws = 0;
+                TreeRenderer.diagMaxTrees = 0;
                 flushDoor5s = 0;
                 flushObj5s = 0;
+                flushTree5s = 0;
                 flushPass5s = 0;
                 gateSkip5s = 0;
                 while (flushSeenPrinted < flushSeen.size()) {
@@ -935,7 +1085,7 @@ public class WindSwayMod {
                 diagAlphaSkips = 0;
                 if (!rejectCounts.isEmpty()) {
                     StringBuilder sb = new StringBuilder("rejects:");
-                    for (java.util.Map.Entry<String, Integer> e : rejectCounts.entrySet()) {
+                    for (Map.Entry<String, Integer> e : rejectCounts.entrySet()) {
                         sb.append(' ').append(e.getKey()).append('=').append(e.getValue());
                     }
                     trace(sb.toString());
@@ -953,10 +1103,6 @@ public class WindSwayMod {
                 trace("enqueue failed", t);
             }
         }
-    }
-
-    public void init() {
-        trace("WindSway initialized");
     }
 
     public static void trace(String msg) {

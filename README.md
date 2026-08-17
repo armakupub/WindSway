@@ -2,18 +2,22 @@
 
 Trees, grass and bushes sway with the wind, from light breeze to storm.
 
-Vanilla can already animate foliage: the "Wind Sprite Effects" option (Display & Performance) lets grass and bushes move with the weather. Trees stay out of it, and on calm days the wind is so low that even the foliage stands still for hours. Wind Sway is about immersion, bringing some life into an otherwise dead world:
+Vanilla's "Wind Sprite Effects" (off by default) shears sprites between random poses; trees only join in above a wind threshold, the big ones barely at all, and on calm days nothing moves for hours. Wind Sway replaces the animation and the renderer:
 
-- **Trees join in**: crowns sway with the weather, and the sway scales with tree size, so the big jumbos show real crown play instead of standing frozen.
-- **Calm days keep a breeze**: two sliders set the sway in still air for plants and trees. Real weather adds on top, storms still hit like storms.
-- **Render-only**: only the sway animation reads the raised wind. Water, sounds, aiming and everything else stay on the real weather.
-- **No twitching**: vanilla's random no-cause jitter is removed from trees. Brushing through grass and bushes still rustles them, fading out once the wind sway masks it.
+- **Trees bend** from the trunk up, the trunk stays put. Leaves flutter, broad crowns move as a block, evergreens as a stiff cone. Scaled to tree size, jumbos included.
+- **Wind has a direction and gusts**: crowns lean with the rain, gusts roll through the forest, storms bend crowns over and hold them. No random poses, no twitching.
+- **Sway in still air**: two sliders, plants and trees. Weather adds on top.
+- **Every plant moves**: bushes and all wind plants, stiffer ones a little less. Nothing waits for a wind threshold.
+- **Render-only**: water, sounds and aiming stay on the real weather.
+- **Batched**: grass in a few draw calls, trees in one batch per list instead of one draw per tree. Cheaper than vanilla's wind option, tree-heavy areas run faster than vanilla (on my machine).
+
+Options → Mods → Wind Sway. No other setup.
 
 [![Wind Sway teaser](https://img.youtube.com/vi/zXTunrHDK6w/maxresdefault.jpg)](https://www.youtube.com/watch?v=zXTunrHDK6w)
 
 ## Maintenance status
 
-Work in progress: I keep optimizing the renderer as time allows. Last tested against PZ build 42.20.2.
+Work in progress: I keep optimizing the renderer as time allows. Last tested against PZ build 42.20.3.
 
 Source is MIT-licensed. Forks and improvements are welcome and encouraged.
 
@@ -35,8 +39,23 @@ No other setup: Wind Sway switches the game's wind path on by itself and ignores
 ## Compatibility
 
 - Safe to add or remove mid-save: no save data touched.
-- Client-side only (the server runs none of it), but in multiplayer it still has to be on the server's mod list.
+- Works well with [Peek a View](https://steamcommunity.com/sharedfiles/filedetails/?id=3710281407), my wall cutaway / tree fade / stair view mod.
 - Not compatible with the original Wind Tree Sway mod (declared incompatible in `mod.info`; both drive the same wind path).
+
+## Multiplayer / dedicated servers
+
+Wind Sway is client-side: the server runs none of its code, each player only sees the effect on their own screen. Two things still have to be in place:
+
+- **On the server**: both mods go into the server's `.ini`, so joining clients download and enable them (keep your other entries, separate with semicolons; `3619862853` = ZombieBuddy, `3782670683` = Wind Sway):
+
+  ```ini
+  Mods=ZombieBuddy;WindSway
+  WorkshopItems=3619862853;3782670683
+  ```
+
+- **On every player's PC**: ZombieBuddy's one-time setup (its installer puts the Java agent into the game folder). The server can't do that part for you. Without it, Options → Mods → Wind Sway shows a warning that the Java part did not load, and nothing sways.
+
+The first time Wind Sway loads on a PC, ZombieBuddy asks for approval of the mod's JAR, tick Allow.
 
 ## Settings
 
@@ -53,13 +72,13 @@ Everything sits under Options → Mods → Wind Sway.
 ## FAQ
 
 **What does it cost in FPS?**
-Some. Swaying vegetation is drawn every frame, so it can never be as cheap as a fully static world. Wind Sway batches that work into a handful of draw calls, which keeps the cost well below the vanilla "Wind Sprite Effects" path; on my machine a hit only shows zoomed far out with a screen full of swaying trees.
+Some. Anything that moves is drawn every frame. Wind Sway batches it (see above), which stays well below the vanilla wind path; tree-heavy areas even run faster than vanilla on my machine.
 
 **Do I need to enable "Wind Sprite Effects" in Display & Performance?**
 No. While Wind Sway is on it drives the game's wind path itself and ignores that option, the mod's master switch is the only one that matters.
 
 **Does it work in multiplayer?**
-Yes, client-side only. Every client also needs ZombieBuddy installed.
+Yes, client-side only. See [Multiplayer / dedicated servers](#multiplayer--dedicated-servers) for the server `.ini` entries and the per-player ZombieBuddy setup.
 
 ## Building from Source
 

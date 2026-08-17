@@ -59,6 +59,7 @@ mapfile -t SOURCES < <(find "$SRC_DIR" -name '*.java')
 
 # --- Package jar ---
 echo "[build] Packaging jar..."
+cp -r "$PROJECT_ROOT/resources/." "$CLASSES_DIR/"
 "$JAR" --create --file "$JAR_OUT" -C "$CLASSES_DIR" .
 
 # --- Stage mod directory ---

@@ -32,7 +32,7 @@ public class Patch_FBORenderCell {
         }
     }
 
-    // Fences, walls, doors: mid-pass draws without depth writes — pending
+    // Fences, walls, doors: mid-pass draws without depth writes, pending
     // grass behind them must flush first. boolean+skipOn with constant
     // false is deliberate: the void OnEnter form kills the whole advice
     // unit (ZB weave shape).

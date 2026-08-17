@@ -1,6 +1,13 @@
 Wind Sway - Changelog
 =====================
 
+0.2.0 - 2026-08-17
+  - New tree animation: crowns bend, leaves flutter, wind has direction and gusts.
+  - Bushes and all plants sway, no wind thresholds.
+  - Trees drawn in one batch instead of one draw per tree.
+  - Fixed: jiggle when the wind direction changed.
+  - Fixed: plants behind see-through trees could vanish.
+
 0.1.2 - 2026-08-15
   - Fixed: thin edges of indoor furniture showed through exterior walls.
     Thanks to @Ismællö for the report and the recordings!

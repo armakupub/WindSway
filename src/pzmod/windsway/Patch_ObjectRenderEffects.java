@@ -5,22 +5,21 @@ import zombie.iso.objects.ObjectRenderEffects;
 
 public class Patch_ObjectRenderEffects {
 
-    // Vanilla feeds one global wind value to both pool families
-    // (updateStatic reads getWindTickFinal once for plants AND trees);
-    // rewriting the arg for isTree pools is the only seam that separates
-    // the tree channel without replicating the pool loop.
+    // updateStatic feeds one global wind value to both pool families;
+    // taking over the per-pool update is the only seam that gives each
+    // family its own channel and motion without replicating the pool loop.
+    // Unknown pools return false and run vanilla.
     @Patch(className = "zombie.iso.objects.ObjectRenderEffects",
            methodName = "update")
     public static class Patch_update {
 
-        // boolean+skipOn returning constant false: non-skipping arg
-        // rewrite. The @Argument binding also disambiguates the overload:
-        // only update(float, float) matches, not the no-arg update().
+        // The @Argument bindings disambiguate the overload: only
+        // update(float, float) matches, not the no-arg update().
         @Patch.OnEnter(skipOn = true)
         public static boolean enter(@Patch.This ObjectRenderEffects self,
-                                    @Patch.Argument(value = 0, readOnly = false) float wind) {
-            wind = WindSwayMod.treePoolWind(self, wind);
-            return false;
+                                    @Patch.Argument(0) float wind,
+                                    @Patch.Argument(1) float angle) {
+            return TreeSway.update(self, angle);
         }
     }
 

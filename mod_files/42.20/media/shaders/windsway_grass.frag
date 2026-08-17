@@ -1,7 +1,7 @@
 #version 120
 
-// tileWithDepth.frag: no alpha discard — coverage comes from the depth map
-// (0 = discard), color blends premultiplied. Depth writes are off in the
+// tileWithDepth.frag: no alpha discard, coverage comes from the depth map
+// (0 = discard), colour blends premultiplied. Depth writes are off in the
 // translucent pass; gl_FragDepth only feeds the LEQUAL test.
 
 uniform sampler2D DIFFUSE;

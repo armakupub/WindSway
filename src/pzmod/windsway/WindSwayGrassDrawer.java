@@ -19,12 +19,11 @@ import zombie.core.textures.TextureDraw;
 import zombie.core.textures.TextureID;
 import zombie.iso.fboRenderChunk.FBORenderChunkManager;
 
-// Grass batch, vanilla-parity path: screen-space quads exactly as
-// Texture.render(ObjectRenderEffects), tileWithDepth-style shading with
-// the engine's authored depth maps. Depth TEST only, no alpha discard;
-// edges stay soft because only depth-map texels of 0 discard. Ordering
-// against no-depth-write translucents is handled capture-side by
-// mid-pass flushes (WindSwayMod.onVanillaTranslucentDraw).
+// Grass batch on vanilla's tileWithDepth contract: screen-space quads as
+// Texture.render(ObjectRenderEffects), the engine's authored depth maps,
+// depth TEST only, no alpha discard (only depth-map texels of 0 discard,
+// so edges stay soft). Ordering against no-depth-write translucents is
+// handled capture-side by mid-pass flushes.
 public class WindSwayGrassDrawer extends TextureDraw.GenericDrawer {
 
     private static Shader shader;
@@ -33,11 +32,10 @@ public class WindSwayGrassDrawer extends TextureDraw.GenericDrawer {
     private static volatile boolean firstBatchLogged = false;
 
     // Streaming VBO, orphaned only on wrap. Not VBORenderer: its flush()
-    // re-specs VBO+IBO via glBufferData every call — built for once per
-    // pass, fatal at ~140 interleave breaks per frame. Here a break costs
-    // one glBufferSubData append plus one glDrawArrays per texture
-    // segment. Attrib layout follows the VBORenderer convention
-    // (location == element index): pos3f, color4f, uv0, uv1, depth1f.
+    // re-specs VBO+IBO via glBufferData every call, built for once per
+    // pass, fatal at ~140 interleave breaks per frame. Attrib layout
+    // follows the VBORenderer convention (location == element index):
+    // pos3f, color4f, uv0, uv1, depth1f.
     private static final int STRIDE = 48;
     private static final int STREAM_CAPACITY = 4 * 1024 * 1024;
     private static int streamVbo = 0;
@@ -54,7 +52,7 @@ public class WindSwayGrassDrawer extends TextureDraw.GenericDrawer {
     public static final class GrassQuad {
         Texture tex;
         Texture depthTex;
-        // Screen rect in the scene's zoomed pixel space (vanilla quad base).
+        // Screen rect in the scene's zoomed pixel space.
         float ox;
         float oy;
         float w;
@@ -68,7 +66,7 @@ public class WindSwayGrassDrawer extends TextureDraw.GenericDrawer {
         float oy3;
         float ox4;
         float oy4;
-        // Diffuse UVs (flip already applied at capture).
+        // Diffuse UVs, flip applied at capture.
         float u0;
         float v0;
         float u1;
@@ -78,7 +76,7 @@ public class WindSwayGrassDrawer extends TextureDraw.GenericDrawer {
         float dv0;
         float du1;
         float dv1;
-        // tileWithDepth uniforms zDepthBlendZ/zDepthBlendToZ, per-vertex here.
+        // tileWithDepth's zDepthBlendZ / zDepthBlendToZ, per vertex here.
         float zNear;
         float zFar;
         float r;
@@ -153,9 +151,9 @@ public class WindSwayGrassDrawer extends TextureDraw.GenericDrawer {
 
             // Scene ortho on the Core stacks is already the right MVP.
             // setDirty before each set: the model pipeline writes depth
-            // state through raw GL11 behind the trackers, an elided set can
-            // leave the real mask on — the batch would then write stalk
-            // depth and punch holes into fences drawn after it.
+            // state through raw GL11 behind the trackers; an elided set can
+            // leave the real mask on and the batch would write stalk depth,
+            // punching holes into fences drawn after it.
             GLStateRenderThread.Blend.setDirty();
             GLStateRenderThread.Blend.set(true);
             GLStateRenderThread.BlendFuncSeparate.setDirty();
