@@ -14,6 +14,7 @@ import zombie.core.Core;
 import zombie.core.SpriteRenderer;
 import zombie.core.math.PZMath;
 import zombie.core.opengl.RenderSettings;
+import zombie.core.opengl.Shader;
 import zombie.core.textures.ColorInfo;
 import zombie.core.textures.Texture;
 import zombie.iso.IsoCamera;
@@ -33,9 +34,11 @@ import zombie.iso.fboRenderChunk.FBORenderObjectOutline;
 import zombie.iso.fboRenderChunk.ObjectRenderInfo;
 import zombie.iso.objects.IsoBarbecue;
 import zombie.iso.objects.IsoCarBatteryCharger;
+import zombie.iso.objects.IsoCurtain;
 import zombie.iso.objects.IsoFire;
 import zombie.iso.objects.IsoFireplace;
 import zombie.iso.objects.IsoMolotovCocktail;
+import zombie.iso.objects.IsoThumpable;
 import zombie.iso.objects.IsoTrap;
 import zombie.iso.objects.IsoTree;
 import zombie.iso.objects.IsoWorldInventoryObject;
@@ -642,6 +645,7 @@ public class WindSwayMod {
             }
             IsoSprite sprite = object.getSprite();
             if (sprite == null) return false;
+            if (!rendersViaIsoObject(object.getClass())) return reject("ownRender", sprite);
             IsoGridSquare square = object.getSquare();
             if (square == null) return reject("noSquare", sprite);
             // IsoObject.render draws nothing for these; capture as nothing
@@ -944,6 +948,27 @@ public class WindSwayMod {
             }
             return false;
         }
+    }
+
+    // Own render overrides draw something other than the tile sprite
+    // (IsoMannequin: 3D model, IsoBarricade: swapped light and alpha);
+    // only IsoObject.render and its thin super.render wrappers are the
+    // path replicated here.
+    private static final HashMap<Class<?>, Boolean> renderViaIsoObject = new HashMap<>();
+
+    private static boolean rendersViaIsoObject(Class<?> cls) {
+        Boolean known = renderViaIsoObject.get(cls);
+        if (known != null) return known;
+        boolean result;
+        try {
+            Class<?> decl = cls.getMethod("render", float.class, float.class, float.class,
+                    ColorInfo.class, boolean.class, boolean.class, Shader.class).getDeclaringClass();
+            result = decl == IsoObject.class || decl == IsoThumpable.class || decl == IsoCurtain.class;
+        } catch (Throwable t) {
+            result = false;
+        }
+        renderViaIsoObject.put(cls, result);
+        return result;
     }
 
     // setupTileDepth's selection chain, reduced to the branches grass

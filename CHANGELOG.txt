@@ -1,6 +1,10 @@
 Wind Sway - Changelog
 =====================
 
+0.2.2 - 2026-08-18
+  - Fixed: objects with their own draw code, mannequins for example, flickered or vanished while fading.
+    Thanks to @KΞRΞS for the report!
+
 0.2.1 - 2026-08-18
   - Fixed: objects in unseen rooms stayed lit with room fade (configRoomFade).
     Thanks to @wastrel for the report and the screenshots!
