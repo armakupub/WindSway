@@ -1,6 +1,12 @@
 Wind Sway - Changelog
 =====================
 
+0.2.1 - 2026-08-18
+  - Fixed: objects in unseen rooms stayed lit with room fade (configRoomFade).
+    Thanks to @wastrel for the report and the screenshots!
+  - Fixed: seam at the base of big conifers; grass in front of the trunk is no longer cut off in a straight line.
+  - Fixed: zoomed far out over dense forest, the tree renderer could switch itself off until restart.
+
 0.2.0 - 2026-08-17
   - New tree animation: crowns bend, leaves flutter, wind has direction and gusts.
   - Bushes and all plants sway, no wind thresholds.

@@ -17,7 +17,7 @@ uniform vec4 outlineColor;
 varying vec4 vColor;
 varying vec4 vUVH;       // xy: uv, z: height fraction (0 base, 1 top), w: branch cell px
 varying vec4 vPixTexel;  // xy: field pixel coords (with per-tree offset), zw: uv extent of one texel
-varying vec4 vRect;      // xy: atlas u range, zw: this segment's v range
+varying vec4 vRect;      // xy: atlas u range, zw: atlas v range (whole sprite, not the depth segment)
 varying vec4 vBend;      // x: top offset in u units, y: height fraction where bending starts, z: bend exponent, w: lobe amplitude u
 varying vec4 vLeaf;      // x: flutter amplitude u, y: amplitude v, z: v at leaf band top, w: v at leaf band bottom
 varying vec4 vMisc;      // x: fade alpha, y: height fraction where bending ends (1 = tip; below 1 the crown above moves as a block), z: lobe amplitude v, w: leaf clock rate

@@ -95,6 +95,14 @@ public final class TreeRenderer {
     public static volatile boolean mainOn = true;
     public static volatile boolean branchOn = true;
     public static volatile boolean leafOn = true;
+    // Floor strip depth offset, linear from the split row to the frame
+    // bottom. Vanilla subtracts a constant 0.0015 from the whole strip:
+    // at the SE corner the tree base sits one square-centre step
+    // (0.00144) behind its own floor and needs that much; at the split
+    // row it is already 0.00048 ahead of the floor, and the full step
+    // there hides grass on the front-side squares along a straight line.
+    public static volatile double floorHackTop = 0.0006;
+    public static volatile double floorHackBottom = 0.0015;
 
     // 5s log counters, written on the render thread only.
     public static volatile int diagRenders;
@@ -146,7 +154,9 @@ public final class TreeRenderer {
     // amp v, band top v, band bottom v), 7 fade alpha, bend end, branch amp v.
     private static final int NUM_ATTRIBS = 8;
     private static final int STRIDE = NUM_ATTRIBS * 16;
-    private static final int STREAM_CAPACITY = 8 * 1024 * 1024;
+    // Grows when one list outsizes it: a throw here would park the
+    // renderer on the vanilla path for the rest of the session.
+    private static int streamCapacity = 8 * 1024 * 1024;
     private static int streamVbo;
     private static int streamOffset;
     private static ByteBuffer stage = BufferUtils.createByteBuffer(512 * 1024);
@@ -178,6 +188,11 @@ public final class TreeRenderer {
     private static final Vector3f scratch = new Vector3f();
 
     private TreeRenderer() {
+    }
+
+    private static float floorHack(float rowsBelowSplit, float stripRows) {
+        float t = stripRows > 0.0f ? Math.min(1.0f, Math.max(0.0f, rowsBelowSplit / stripRows)) : 1.0f;
+        return (float) (floorHackTop + (floorHackBottom - floorHackTop) * t);
     }
 
     private static double smooth(double e0, double e1, double x) {
@@ -528,18 +543,28 @@ public final class TreeRenderer {
                 float pixR = w + pad + seedX;
 
                 // Vanilla segments: base sprite in two pieces split above the
-                // floor strip (the lower piece sits 0.0015 nearer), foliage
-                // overlay whole and 1e-4 in front.
+                // floor strip (the lower piece sits nearer, floorHackTop to
+                // floorHackBottom instead of vanilla's constant 0.0015),
+                // foliage overlay whole and 1e-4 in front. The split is depth only;
+                // the sample rect stays the whole sprite, a per-segment rect
+                // makes the bilinear blend the split row with transparent
+                // and vertical offsets discard along it (visible seam).
                 int segs = part == 0 ? 2 : 1;
                 float y2 = part == 0 ? PZMath.min(hOrig - dyFloor, offY + h) : offY + h;
                 for (int s = 0; s < segs; ++s) {
                     float top = s == 0 ? offY : y2;
                     float bottom = s == 0 ? y2 : offY + h;
                     if (bottom <= top) continue;
-                    float depth = depthBase;
-                    if (part == 1) depth -= 1.0E-4f;
-                    if (top > offY) depth -= 0.0015f;
-                    float vSeg0 = yStartTex + (top - offY) * texelV;
+                    float depthT = depthBase;
+                    float depthB = depthBase;
+                    if (part == 1) {
+                        depthT -= 1.0E-4f;
+                        depthB -= 1.0E-4f;
+                    }
+                    if (top > offY) {
+                        depthT -= floorHack(top - y2, dyFloor);
+                        depthB -= floorHack(bottom - y2, dyFloor);
+                    }
                     float vSeg1 = yStartTex + (bottom - offY) * texelV;
                     float rowT = s == 0 ? top - padY : top;
                     float yT = unitsY - rowT / hOrig * unitsY;
@@ -554,17 +579,17 @@ public final class TreeRenderer {
                         cur = newRun(texId, vertCount, group);
                     }
                     ByteBuffer o = stage;
-                    putVertex(o, xL, yT, wX, wY, wZ, depth, r, g, b, a, uL, vQuad0, hTop, branchCell,
-                            pixL, pixT, texelU, texelV, xStart, xEnd, vSeg0, vSeg1,
+                    putVertex(o, xL, yT, wX, wY, wZ, depthT, r, g, b, a, uL, vQuad0, hTop, branchCell,
+                            pixL, pixT, texelU, texelV, xStart, xEnd, yStartTex, yEndTex,
                             leanU, hc, powTree, branchU, leafU, leafV, vLeafTop, vLeafBottom, fadeAlpha, hKnee, branchV, leafRate);
-                    putVertex(o, xR, yT, wX, wY, wZ, depth, r, g, b, a, uR, vQuad0, hTop, branchCell,
-                            pixR, pixT, texelU, texelV, xStart, xEnd, vSeg0, vSeg1,
+                    putVertex(o, xR, yT, wX, wY, wZ, depthT, r, g, b, a, uR, vQuad0, hTop, branchCell,
+                            pixR, pixT, texelU, texelV, xStart, xEnd, yStartTex, yEndTex,
                             leanU, hc, powTree, branchU, leafU, leafV, vLeafTop, vLeafBottom, fadeAlpha, hKnee, branchV, leafRate);
-                    putVertex(o, xR, yB, wX, wY, wZ, depth, r, g, b, a, uR, vSeg1, hBottom, branchCell,
-                            pixR, pixB, texelU, texelV, xStart, xEnd, vSeg0, vSeg1,
+                    putVertex(o, xR, yB, wX, wY, wZ, depthB, r, g, b, a, uR, vSeg1, hBottom, branchCell,
+                            pixR, pixB, texelU, texelV, xStart, xEnd, yStartTex, yEndTex,
                             leanU, hc, powTree, branchU, leafU, leafV, vLeafTop, vLeafBottom, fadeAlpha, hKnee, branchV, leafRate);
-                    putVertex(o, xL, yB, wX, wY, wZ, depth, r, g, b, a, uL, vSeg1, hBottom, branchCell,
-                            pixL, pixB, texelU, texelV, xStart, xEnd, vSeg0, vSeg1,
+                    putVertex(o, xL, yB, wX, wY, wZ, depthB, r, g, b, a, uL, vSeg1, hBottom, branchCell,
+                            pixL, pixB, texelU, texelV, xStart, xEnd, yStartTex, yEndTex,
                             leanU, hc, powTree, branchU, leafU, leafV, vLeafTop, vLeafBottom, fadeAlpha, hKnee, branchV, leafRate);
                     cur.count += 4;
                     vertCount += 4;
@@ -607,10 +632,6 @@ public final class TreeRenderer {
         }
         stage.flip();
         int bytes = vertCount * STRIDE;
-        if (bytes > STREAM_CAPACITY) {
-            releaseRuns();
-            throw new IllegalStateException("tree batch exceeds stream capacity: " + bytes);
-        }
 
         Matrix4f p = Core.getInstance().projectionMatrixStack.alloc();
         p.set(proj);
@@ -634,12 +655,16 @@ public final class TreeRenderer {
             if (streamVbo == 0) {
                 streamVbo = GL15.glGenBuffers();
                 GL15.glBindBuffer(GL15.GL_ARRAY_BUFFER, streamVbo);
-                GL15.glBufferData(GL15.GL_ARRAY_BUFFER, STREAM_CAPACITY, GL15.GL_STREAM_DRAW);
+                GL15.glBufferData(GL15.GL_ARRAY_BUFFER, streamCapacity, GL15.GL_STREAM_DRAW);
             } else {
                 GL15.glBindBuffer(GL15.GL_ARRAY_BUFFER, streamVbo);
             }
-            if (streamOffset + bytes > STREAM_CAPACITY) {
-                GL15.glBufferData(GL15.GL_ARRAY_BUFFER, STREAM_CAPACITY, GL15.GL_STREAM_DRAW);
+            if (bytes > streamCapacity) {
+                while (streamCapacity < bytes) streamCapacity *= 2;
+                GL15.glBufferData(GL15.GL_ARRAY_BUFFER, streamCapacity, GL15.GL_STREAM_DRAW);
+                streamOffset = 0;
+            } else if (streamOffset + bytes > streamCapacity) {
+                GL15.glBufferData(GL15.GL_ARRAY_BUFFER, streamCapacity, GL15.GL_STREAM_DRAW);
                 streamOffset = 0;
             }
             GL15.glBufferSubData(GL15.GL_ARRAY_BUFFER, streamOffset, stage);

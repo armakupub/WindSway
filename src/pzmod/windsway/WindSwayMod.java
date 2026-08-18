@@ -25,6 +25,7 @@ import zombie.characters.IsoGameCharacter;
 import zombie.iso.PlayerCamera;
 import zombie.iso.SpriteDetails.IsoFlagType;
 import zombie.iso.fboRenderChunk.FBORenderCell;
+import zombie.iso.fboRenderChunk.FBORenderCutaways;
 import zombie.iso.fboRenderChunk.FBORenderTrees;
 import zombie.iso.fboRenderChunk.FBORenderChunk;
 import zombie.iso.fboRenderChunk.FBORenderObjectHighlight;
@@ -82,6 +83,11 @@ public class WindSwayMod {
 
     public static void setTreeSharp(double v) {
         TreeRenderer.sharp = v;
+    }
+
+    public static void setTreeFloorHack(double top, double bottom) {
+        TreeRenderer.floorHackTop = top;
+        TreeRenderer.floorHackBottom = bottom;
     }
 
     public static void setTreeTrunk(double v) {
@@ -738,21 +744,42 @@ public class WindSwayMod {
             }
 
             // Raw square light feeds overlay and attachments; only the
-            // main sprite gets customColor and forceAmbient.
+            // main sprite gets customColor and forceAmbient. The upper
+            // part of a multi-level object in a collapsed building is lit
+            // from the square below (renderMinusFloor_NotDoorOrWall);
+            // only the overlaySpriteColor path reads the object's own
+            // square (renderOverlaySprites).
+            ColorInfo ownLi = square.getLightInfo(playerIndex);
+            ColorInfo li = ownLi;
+            if (FBORenderCutaways.getInstance().isForceRenderSquare(playerIndex, square)) {
+                IsoGridSquare below = square.getCell().getGridSquare(square.x, square.y, square.z - 1);
+                if (below != null) li = below.getLightInfo(playerIndex);
+            }
             float liR = 1.0f;
             float liG = 1.0f;
             float liB = 1.0f;
             float liA = 1.0f;
-            ColorInfo li = square.getLightInfo(playerIndex);
             if (li != null) {
                 liR = li.r;
                 liG = li.g;
                 liB = li.b;
                 liA = li.a;
             }
-            float lr = liR;
-            float lg = liG;
-            float lb = liB;
+            float ownR = ownLi != null ? ownLi.r : 1.0f;
+            float ownG = ownLi != null ? ownLi.g : 1.0f;
+            float ownB = ownLi != null ? ownLi.b : 1.0f;
+            // Blacked-out buildings and configRoomFade rooms: vanilla
+            // scales rgb by 1 - fadeRatio (prepareToRender), forceAmbient
+            // overrides it, overlays without overlaySpriteColor get it
+            // twice (renderAttachedAndOverlaySpritesInternal, then
+            // renderOverlaySprites again).
+            float fade = 1.0f;
+            if (FBORenderCell.instance.isBlackedOutBuildingSquare(square)) {
+                fade = 1.0f - FBORenderCell.instance.getBlackedOutRoomFadeRatio(square);
+            }
+            float lr = liR * fade;
+            float lg = liG * fade;
+            float lb = liB * fade;
             ColorInfo custom = object.getCustomColor();
             if (custom != null) {
                 lr *= custom.r;
@@ -789,15 +816,15 @@ public class WindSwayMod {
                 if (otex == null || otex.getTextureId() == null) return reject("overlayPart", overlay);
                 Texture odepth = selectDepthTexture(overlay, object);
                 if (odepth == null || odepth.getTextureId() == null) return reject("overlayPart", overlay);
-                float ocr = liR;
-                float ocg = liG;
-                float ocb = liB;
+                float ocr = liR * fade * fade;
+                float ocg = liG * fade * fade;
+                float ocb = liB * fade * fade;
                 float oFactor = liA;
                 ColorInfo osc = object.getOverlaySpriteColor();
                 if (osc != null) {
-                    ocr = osc.r * liR;
-                    ocg = osc.g * liG;
-                    ocb = osc.b * liB;
+                    ocr = osc.r * ownR * fade;
+                    ocg = osc.g * ownG * fade;
+                    ocb = osc.b * ownB * fade;
                     oFactor = osc.a;
                 }
                 float oAlpha = alpha;
@@ -865,7 +892,7 @@ public class WindSwayMod {
                 parts.add(buildPart(tex2, depthTex2, spr, baseSx, baseSy,
                         sX2, sY2, uvSX, uvSY, s.flip,
                         zNear, zFar, ore,
-                        liR * s.tintr, liG * s.tintg, liB * s.tintb, a2));
+                        liR * fade * s.tintr, liG * fade * s.tintg, liB * fade * s.tintb, a2));
             }
 
             // Canary: if the pass advice never drains us (weave failure),
