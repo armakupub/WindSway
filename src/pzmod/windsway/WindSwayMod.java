@@ -9,12 +9,17 @@ import java.util.Map;
 import me.zed_0xff.zombie_buddy.Accessor;
 import me.zed_0xff.zombie_buddy.Exposer;
 
+import org.lwjgl.opengl.GL11;
+
 import zombie.GameTime;
 import zombie.core.Core;
 import zombie.core.SpriteRenderer;
 import zombie.core.math.PZMath;
 import zombie.core.opengl.RenderSettings;
 import zombie.core.opengl.Shader;
+import zombie.core.opengl.ShaderProgram;
+import zombie.debug.DebugType;
+import zombie.debug.LogSeverity;
 import zombie.core.textures.ColorInfo;
 import zombie.core.textures.Texture;
 import zombie.iso.IsoCamera;
@@ -22,6 +27,7 @@ import zombie.iso.IsoDepthHelper;
 import zombie.iso.IsoGridSquare;
 import zombie.iso.IsoObject;
 import zombie.iso.IsoUtils;
+import zombie.iso.IsoWorld;
 import zombie.characters.IsoGameCharacter;
 import zombie.iso.PlayerCamera;
 import zombie.iso.SpriteDetails.IsoFlagType;
@@ -448,6 +454,20 @@ public class WindSwayMod {
         debugTint = v;
     }
 
+    // Debug: next grass batch fails, plants must stay visible via vanilla.
+    public static void setDebugGrassFail(boolean v) {
+        WindSwayGrassDrawer.debugFail = v;
+    }
+
+    // Arms both renderers again after a latch. Called per new world and
+    // from the console.
+    public static void rearm() {
+        WindSwayGrassDrawer.rearm();
+        TreeRenderer.rearm();
+    }
+
+    private static IsoWorld lastWorld;
+
     // Debug: 5s counters plus reject/flush-trigger names in the console.
     public static volatile boolean debugLog = false;
 
@@ -629,6 +649,7 @@ public class WindSwayMod {
         try {
             if (!FBORenderCell.instance.renderTranslucentOnly) return false;
             if (!Core.getInstance().getOptionDoWindSpriteEffects()) return false;
+            if (!WindSwayGrassDrawer.ready()) return false;
             // setupTileDepth's special-object list (chunk depth or own
             // shader). Everything else on this path is a tile-depth quad;
             // capturing non-wind objects too keeps a field one pipeline
@@ -900,14 +921,11 @@ public class WindSwayMod {
             }
 
             // Canary: if the pass advice never drains us (weave failure),
-            // cap instead of leaking.
+            // nothing captured ever gets drawn.
             if (pendingQuads.size() > 100000) {
                 pendingQuads.clear();
                 pendBoundsValid = false;
-                if (!captureFailedLogged) {
-                    captureFailedLogged = true;
-                    trace("pendingQuads overflow, pass advice not running? batch disabled this session");
-                }
+                WindSwayGrassDrawer.fail("pending batch overflowed, pass advice not running?");
                 return false;
             }
             pendingQuads.addAll(parts);
@@ -1102,12 +1120,18 @@ public class WindSwayMod {
     }
 
     public static void onTranslucentPassDone(int playerIndex, int z) {
-        if (!enabled) return;
         try {
             if (debugLog && !pendingQuads.isEmpty()) {
                 flushPass5s++;
             }
             flushPending();
+            WindSwayGrassDrawer.onPassDone();
+            IsoWorld world = IsoWorld.instance;
+            if (world != lastWorld) {
+                lastWorld = world;
+                rearm();
+            }
+            if (!enabled) return;
 
             long now = System.currentTimeMillis();
             if (debugLog && now - lastWindLog > 5000L) {
@@ -1155,6 +1179,51 @@ public class WindSwayMod {
                 trace("enqueue failed", t);
             }
         }
+    }
+
+    // Render thread. GL errors never throw; the error flag is sampled
+    // around the first batches of a session and every few seconds after
+    // that. Never per batch: the query can sync with the driver thread.
+    static final class GlProbe {
+        private int samples;
+        private long lastMs;
+
+        boolean begin() {
+            if (samples >= 100 && System.currentTimeMillis() - lastMs < 5000L) return false;
+            while (GL11.glGetError() != GL11.GL_NO_ERROR) {
+            }
+            return true;
+        }
+
+        int end() {
+            samples++;
+            lastMs = System.currentTimeMillis();
+            return GL11.glGetError();
+        }
+
+        void reset() {
+            samples = 0;
+        }
+    }
+
+    // Render thread. The engine compiles with DebugType.Shader at Off:
+    // unit info logs go through debugln, link errors through error(), both
+    // gated by that severity, so a failed compile leaves no text in
+    // console.txt. Recompile once with the severity opened so the driver's
+    // message lands in the log.
+    static boolean recompileShaderWithLog(ShaderProgram program) {
+        LogSeverity prev = DebugType.Shader.getLogSeverity();
+        boolean open = !DebugType.Shader.isEnabled(LogSeverity.Debug);
+        if (open) DebugType.Shader.setLogSeverity(LogSeverity.Debug);
+        try {
+            trace("shader " + program.getName() + " failed to compile, retrying with the shader log open");
+            program.compile();
+        } catch (Throwable t) {
+            trace("shader retry failed", t);
+        } finally {
+            if (open) DebugType.Shader.setLogSeverity(prev);
+        }
+        return program.isCompiled();
     }
 
     public static void trace(String msg) {

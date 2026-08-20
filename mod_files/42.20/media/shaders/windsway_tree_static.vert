@@ -4,15 +4,29 @@
 // vertex attributes, one ModelViewProjection for the whole list. Depth
 // is applied exactly like vboRenderer_PositionColorUV.vert's userDepth,
 // per vertex instead of per run.
+//
+// Attribute comments must stay off the layout lines: on GL 2.1 the engine
+// rewrites "layout (location = N) in ..." to "attribute ..." with a regex
+// that requires the line to end at the ';'. A trailing comment blocks the
+// rewrite, GLSL 1.20 rejects "layout", and the whole program fails to link
+// (Mac fell back to vanilla trees, no sway). See README-Shaders.txt.
 
-layout (location = 0) in vec4 aPosDepth;   // world xyz, depth offset
+// aPosDepth: world xyz, depth offset
+layout (location = 0) in vec4 aPosDepth;
+// aColor
 layout (location = 1) in vec4 aColor;
-layout (location = 2) in vec4 aUVH;        // u, v, height fraction, branch cell px
-layout (location = 3) in vec4 aPixTexel;   // field pixel coords, uv per texel
-layout (location = 4) in vec4 aRect;       // atlas u range, atlas v range
-layout (location = 5) in vec4 aBend;       // lean u, bend start, exponent, branch amp u
-layout (location = 6) in vec4 aLeaf;       // flutter amp u, amp v, band top v, band bottom v
-layout (location = 7) in vec4 aMisc;       // fade alpha, bend end, lobe amp v, leaf clock rate
+// aUVH: u, v, height fraction, branch cell px
+layout (location = 2) in vec4 aUVH;
+// aPixTexel: field pixel coords, uv per texel
+layout (location = 3) in vec4 aPixTexel;
+// aRect: atlas u range, atlas v range
+layout (location = 4) in vec4 aRect;
+// aBend: lean u, bend start, exponent, branch amp u
+layout (location = 5) in vec4 aBend;
+// aLeaf: flutter amp u, amp v, band top v, band bottom v
+layout (location = 6) in vec4 aLeaf;
+// aMisc: fade alpha, bend end, lobe amp v, leaf clock rate
+layout (location = 7) in vec4 aMisc;
 
 uniform mat4 ModelViewProjection;
 

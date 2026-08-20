@@ -10,6 +10,7 @@ docs/
 videos/
 *.mp4
 debug_img/
+debug_apple-m1/
 reference/
 
 # IDE / OS

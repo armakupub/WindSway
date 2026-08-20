@@ -110,9 +110,21 @@ public final class TreeRenderer {
     public static volatile int diagDraws;
     public static volatile int diagMaxTrees;
 
-    private static boolean ok = true;
+    private static volatile boolean ok = true;
     private static Shader shader;
     private static ShaderProgram program;
+    private static final WindSwayMod.GlProbe glProbe = new WindSwayMod.GlProbe();
+
+    // Game thread. After a latch: init again, once per new world or on
+    // request from the console.
+    static void rearm() {
+        if (ok) return;
+        shader = null;
+        program = null;
+        glProbe.reset();
+        ok = true;
+        WindSwayMod.trace("tree renderer re-armed, trying again");
+    }
 
     // True while trees are drawn here; addTree then strips the shared pool
     // sway from the ORE and leaves only per-object effects (axe shudder).
@@ -276,7 +288,7 @@ public final class TreeRenderer {
 
         shader = ShaderManager.instance.getOrCreateShader("windsway_tree", true, false);
         program = shader.getShaderProgram();
-        if (!program.isCompiled()) {
+        if (!program.isCompiled() && !WindSwayMod.recompileShaderWithLog(program)) {
             throw new IllegalStateException("windsway_tree shader not compiled");
         }
         ShaderProgram.Uniform u;
@@ -297,6 +309,11 @@ public final class TreeRenderer {
         ok = false;
         System.out.println("[WindSway] tree renderer disabled, trees follow vanilla: " + t);
         t.printStackTrace(System.out);
+    }
+
+    private static void fail(String why) {
+        ok = false;
+        System.out.println("[WindSway] tree renderer disabled, trees follow vanilla: " + why);
     }
 
     // Render thread, in place of FBORenderTrees.render. Returns true when
@@ -640,6 +657,7 @@ public final class TreeRenderer {
         m.set(mvCommon);
         Core.getInstance().modelViewMatrixStack.push(m);
         try {
+            boolean glCheck = glProbe.begin();
             GL13.glActiveTexture(GL13.GL_TEXTURE0);
             GL11.glDepthMask(true);
             GL11.glDepthFunc(GL11.GL_LEQUAL);
@@ -732,6 +750,12 @@ public final class TreeRenderer {
             }
             SpriteRenderer.ringBuffer.restoreVbos = true;
             SpriteRenderer.ringBuffer.restoreBoundTextures = true;
+            if (glCheck) {
+                int err = glProbe.end();
+                if (err != GL11.GL_NO_ERROR) {
+                    fail("GL error 0x" + Integer.toHexString(err) + " after the list draw");
+                }
+            }
         } finally {
             Core.getInstance().modelViewMatrixStack.pop();
             Core.getInstance().projectionMatrixStack.pop();

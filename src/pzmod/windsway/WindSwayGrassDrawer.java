@@ -28,8 +28,63 @@ public class WindSwayGrassDrawer extends TextureDraw.GenericDrawer {
 
     private static Shader shader;
     private static volatile boolean samplersSet = false;
-    private static volatile boolean renderFailedLogged = false;
     private static volatile boolean firstBatchLogged = false;
+
+    // Capture skips vanilla's draw on the game thread, the batch draws on
+    // the render thread; a drawer that cannot draw would leave every
+    // captured object invisible but clickable. Capture is gated on this
+    // state: UNKNOWN until a probe drawer has compiled the shader, FAILED
+    // on any failure until the next world load (everything vanilla, like
+    // the tree renderer's latch).
+    private static final int UNKNOWN = 0;
+    private static final int READY = 1;
+    private static final int FAILED = 2;
+    private static volatile int state = UNKNOWN;
+    private static boolean probeQueued = false;
+
+    // Debug: the next batch throws, exercising the fallback.
+    static volatile boolean debugFail = false;
+
+    // Game thread, mid-pass. One probe per pass until the state is known.
+    static boolean ready() {
+        int s = state;
+        if (s == READY) return true;
+        if (s == UNKNOWN && !probeQueued) {
+            probeQueued = true;
+            SpriteRenderer.instance.drawGeneric(new WindSwayGrassDrawer());
+        }
+        return false;
+    }
+
+    static void onPassDone() {
+        probeQueued = false;
+    }
+
+    // Game thread. After a latch: probe again, once per new world or on
+    // request from the console.
+    static void rearm() {
+        if (state != FAILED) return;
+        shader = null;
+        samplersSet = false;
+        probeQueued = false;
+        glProbe.reset();
+        state = UNKNOWN;
+        WindSwayMod.trace("grass batch re-armed, probing again");
+    }
+
+    private static final WindSwayMod.GlProbe glProbe = new WindSwayMod.GlProbe();
+
+    static void fail(String why) {
+        if (state == FAILED) return;
+        state = FAILED;
+        WindSwayMod.trace("grass batch disabled, plants follow vanilla: " + why);
+    }
+
+    private static void fail(Throwable t) {
+        if (state == FAILED) return;
+        state = FAILED;
+        WindSwayMod.trace("grass batch disabled, plants follow vanilla: " + t, t);
+    }
 
     // Streaming VBO, orphaned only on wrap. Not VBORenderer: its flush()
     // re-specs VBO+IBO via glBufferData every call, built for once per
@@ -37,7 +92,7 @@ public class WindSwayGrassDrawer extends TextureDraw.GenericDrawer {
     // follows the VBORenderer convention (location == element index):
     // pos3f, color4f, uv0, uv1, depth1f.
     private static final int STRIDE = 48;
-    private static final int STREAM_CAPACITY = 4 * 1024 * 1024;
+    private static int streamCapacity = 4 * 1024 * 1024;
     private static int streamVbo = 0;
     private static int streamOffset = 0;
     private static ByteBuffer stage = BufferUtils.createByteBuffer(256 * 1024);
@@ -91,23 +146,27 @@ public class WindSwayGrassDrawer extends TextureDraw.GenericDrawer {
         this.quads = quads;
     }
 
-    private static volatile boolean bakeSkipLogged = false;
-
     @Override
     public void render() {
+        if (state == FAILED) return;
         try {
+            if (debugFail) {
+                throw new IllegalStateException("forced by setDebugGrassFail");
+            }
             if (FBORenderChunkManager.instance.renderThreadCurrent != null) {
-                if (!bakeSkipLogged) {
-                    bakeSkipLogged = true;
-                    WindSwayMod.trace("batch skipped: render thread inside chunk bake");
-                }
+                fail("render thread inside a chunk bake");
                 return;
             }
-            if (this.quads == null || this.quads.isEmpty()) return;
             if (shader == null) {
                 shader = ShaderManager.instance.getOrCreateShader("windsway_grass", true, false);
             }
-            if (!shader.getShaderProgram().isCompiled()) return;
+            if (!shader.getShaderProgram().isCompiled()
+                    && !WindSwayMod.recompileShaderWithLog(shader.getShaderProgram())) {
+                fail("windsway_grass shader not compiled");
+                return;
+            }
+            state = READY;
+            if (this.quads == null || this.quads.isEmpty()) return;
 
             int maxBytes = this.quads.size() * 4 * STRIDE;
             if (stage.capacity() < maxBytes) {
@@ -141,19 +200,13 @@ public class WindSwayGrassDrawer extends TextureDraw.GenericDrawer {
             if (vertCount == 0) return;
             stage.flip();
             int bytes = vertCount * STRIDE;
-            if (bytes > STREAM_CAPACITY) {
-                if (!renderFailedLogged) {
-                    renderFailedLogged = true;
-                    WindSwayMod.trace("batch exceeds stream capacity: " + bytes);
-                }
-                return;
-            }
 
             // Scene ortho on the Core stacks is already the right MVP.
             // setDirty before each set: the model pipeline writes depth
             // state through raw GL11 behind the trackers; an elided set can
             // leave the real mask on and the batch would write stalk depth,
             // punching holes into fences drawn after it.
+            boolean glCheck = glProbe.begin();
             GLStateRenderThread.Blend.setDirty();
             GLStateRenderThread.Blend.set(true);
             GLStateRenderThread.BlendFuncSeparate.setDirty();
@@ -179,12 +232,16 @@ public class WindSwayGrassDrawer extends TextureDraw.GenericDrawer {
             if (streamVbo == 0) {
                 streamVbo = GL15.glGenBuffers();
                 GL15.glBindBuffer(GL15.GL_ARRAY_BUFFER, streamVbo);
-                GL15.glBufferData(GL15.GL_ARRAY_BUFFER, STREAM_CAPACITY, GL15.GL_STREAM_DRAW);
+                GL15.glBufferData(GL15.GL_ARRAY_BUFFER, streamCapacity, GL15.GL_STREAM_DRAW);
             } else {
                 GL15.glBindBuffer(GL15.GL_ARRAY_BUFFER, streamVbo);
             }
-            if (streamOffset + bytes > STREAM_CAPACITY) {
-                GL15.glBufferData(GL15.GL_ARRAY_BUFFER, STREAM_CAPACITY, GL15.GL_STREAM_DRAW);
+            if (bytes > streamCapacity) {
+                while (streamCapacity < bytes) streamCapacity *= 2;
+                GL15.glBufferData(GL15.GL_ARRAY_BUFFER, streamCapacity, GL15.GL_STREAM_DRAW);
+                streamOffset = 0;
+            } else if (streamOffset + bytes > streamCapacity) {
+                GL15.glBufferData(GL15.GL_ARRAY_BUFFER, streamCapacity, GL15.GL_STREAM_DRAW);
                 streamOffset = 0;
             }
             GL15.glBufferSubData(GL15.GL_ARRAY_BUFFER, streamOffset, stage);
@@ -239,15 +296,21 @@ public class WindSwayGrassDrawer extends TextureDraw.GenericDrawer {
             // OUR buffer, usually the very draw that triggered the flush.
             SpriteRenderer.ringBuffer.restoreVbos = true;
             SpriteRenderer.ringBuffer.restoreBoundTextures = true;
+            if (glCheck) {
+                int err = glProbe.end();
+                if (err != GL11.GL_NO_ERROR) {
+                    fail("GL error 0x" + Integer.toHexString(err) + " after the batch draw");
+                    return;
+                }
+            }
             if (!firstBatchLogged) {
                 firstBatchLogged = true;
                 WindSwayMod.trace("first grass batch rendered (" + this.quads.size() + " quads)");
             }
         } catch (Throwable t) {
-            if (!renderFailedLogged) {
-                renderFailedLogged = true;
-                WindSwayMod.trace("grass batch render failed", t);
-            }
+            SpriteRenderer.ringBuffer.restoreVbos = true;
+            SpriteRenderer.ringBuffer.restoreBoundTextures = true;
+            fail(t);
         }
     }
 

@@ -1,6 +1,12 @@
 Wind Sway - Changelog
 =====================
 
+0.2.3 - 2026-08-20
+  - Fixed: on some systems furniture and plants could turn invisible while staying clickable.
+    Thanks to @BiohazardBR and @Soldado Bubba for the reports!
+  - Fixed: on macOS trees only had the vanilla sway; the tree renderer now runs on the Mac's OpenGL 2.1 path.
+    Note for macOS: play at the display's native resolution. Scaled fullscreen modes make the game's sprites shimmer in motion, and swaying makes that more visible.
+
 0.2.2 - 2026-08-18
   - Fixed: objects with their own draw code, mannequins for example, flickered or vanished while fading.
     Thanks to @KΞRΞS for the report!
