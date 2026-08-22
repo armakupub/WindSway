@@ -1,6 +1,14 @@
 Wind Sway - Changelog
 =====================
 
+0.3.0 - 2026-08-23
+  - Tree animation retuned: gusts travel through the forest, branches move, leaves flutter in patches, evergreens bounce their branch tiers.
+  - Bare trees (winter, burned) sway as bare branches, no leaf animation.
+  - Grass, bushes and plants bend instead of shearing; damped beside fences and walls.
+  - Sliders are now a baseline: the weather shows as it is above it. Default 0.2, settings reset once.
+  - Performance: much less GPU and CPU time; dense forest fully zoomed out runs at the 177 fps cap on my machine (0.2.3: 80-100 fps).
+  - Fixed: grass and bushes beside fences bent through them.
+
 0.2.3 - 2026-08-20
   - Fixed: on some systems furniture and plants could turn invisible while staying clickable.
     Thanks to @BiohazardBR and @Soldado Bubba for the reports!

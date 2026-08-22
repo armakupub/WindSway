@@ -6,7 +6,7 @@ I built this for immersion: in vanilla the vegetation stands still most of the t
 
 - **Trees bend** from the trunk up. Leaves flutter, broad crowns move as a block, evergreens as a stiff cone. Scaled to tree size, jumbos included.
 - **Wind has a direction and gusts**: crowns lean with the rain, gusts roll through the forest, storms bend crowns over and hold them.
-- **Sway in still air**: two sliders, plants and trees. Weather adds on top, 0 = vanilla wind only.
+- **Sway in still air**: two sliders, plants and trees, set the baseline. Stronger weather shows as it is, 0 = vanilla wind only.
 - **Every plant moves**: bushes and all wind plants, stiffer ones a little less.
 - **Render-only**: water, sounds and aiming stay on the real weather.
 - **Own renderer**: grass and trees drawn in batches instead of one draw call per sprite.
@@ -17,7 +17,7 @@ Options → Mods → Wind Sway, no other setup: the mod turns the game's wind ef
 
 ## Maintenance status
 
-Early work in progress: the animations aren't tuned yet, bare trees (seasons) don't get their own treatment yet, and bugs are possible.
+Work in progress: bugs are possible.
 
 ## Requirements
 
@@ -58,8 +58,8 @@ Everything sits under Options → Mods → Wind Sway.
 | Setting | Range / Default | What it does |
 |---|---|---|
 | Enable Wind Sway | on | Master switch: turns on the game's wind effects and draws swaying vegetation with the mod's own renderer. Off = back to your vanilla settings. |
-| Minimum sway (plants) | 0–0.5, default 0.1 | Sway in still air. Wind adds on top. 0 = vanilla wind only. |
-| Minimum sway (trees) | 0–0.5, default 0.1 | Same for tree crowns. 0 = vanilla wind only. |
+| Minimum sway (plants) | 0–0.5, default 0.2 | Sway in still air. Stronger weather shows as it is. 0 = vanilla wind only. |
+| Minimum sway (trees) | 0–0.5, default 0.2 | Same for tree crowns. 0 = vanilla wind only. |
 
 ## FAQ
 

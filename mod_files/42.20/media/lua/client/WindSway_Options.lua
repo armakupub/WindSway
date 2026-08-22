@@ -35,7 +35,7 @@ enableOpt.onChangeApply = function(self, value)
     applyToJava("setEnabled", value)
 end
 
-modOptions:addDescription("Sway in still air. Wind adds on top.")
+modOptions:addDescription("Sway in still air. Stronger weather shows as it is.")
 
 -- No custom slider-label formatter (the setName shim is unreliable);
 -- the scale hint lives in the description.
