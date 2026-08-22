@@ -10,17 +10,14 @@ import java.util.regex.Pattern;
 
 import zombie.core.textures.Texture;
 
-// Per-sprite silhouette metrics measured offline from the vanilla texture
-// packs (tools/tree_profiles.py): where the content sits in the frame,
-// where the crown starts, where the leaves are. Rows are frame pixels.
+// Per-sprite silhouette metrics from tools/tree_profiles.py, rows in frame
+// pixels.
 final class TreeProfile {
 
     final float baseRow;
     final float topRow;
     final float crownRow;
     final boolean leafy;
-    final float leafTopRow;
-    final float leafBottomRow;
     final boolean rigid;
     final float stubTopRow;
     // Tapered crown that bends like a rod up to the tip; broad crowns move
@@ -28,14 +25,11 @@ final class TreeProfile {
     final boolean conifer;
 
     private TreeProfile(float baseRow, float topRow, float crownRow, boolean leafy,
-                        float leafTopRow, float leafBottomRow, boolean rigid, float stubTopRow,
-                        boolean conifer) {
+                        boolean rigid, float stubTopRow, boolean conifer) {
         this.baseRow = baseRow;
         this.topRow = topRow;
         this.crownRow = crownRow;
         this.leafy = leafy;
-        this.leafTopRow = leafTopRow;
-        this.leafBottomRow = leafBottomRow;
         this.rigid = rigid;
         this.stubTopRow = stubTopRow;
         this.conifer = conifer;
@@ -68,17 +62,10 @@ final class TreeProfile {
                 float top = Float.parseFloat(f[2]);
                 float crownFrac = Float.parseFloat(f[3]);
                 boolean leafy = f[4].equals("1");
-                float leafTop = Float.parseFloat(f[5]);
-                float leafBottom = Float.parseFloat(f[6]);
                 boolean rigid = f[7].equals("1");
                 float stubTop = f.length > 8 ? Float.parseFloat(f[8]) : base;
                 float crownRow = base - crownFrac * (base - top);
-                if (leafTop < 0.0f || leafBottom < 0.0f) {
-                    leafTop = top;
-                    leafBottom = crownRow;
-                }
-                map.put(f[0], new TreeProfile(base, top, crownRow, leafy, leafTop, leafBottom, rigid, stubTop,
-                        coniferByName(f[0])));
+                map.put(f[0], new TreeProfile(base, top, crownRow, leafy, rigid, stubTop, coniferByName(f[0])));
             }
         } catch (Throwable t) {
             tableFailed = true;
@@ -87,14 +74,15 @@ final class TreeProfile {
         table = map;
     }
 
-    // Unknown sprites (mods): content box from the trim offsets, crown
-    // assumed to start a fifth of the way up, leaves in the upper part.
+    // Unknown sprites (mods): leafy, crown a fifth of the way up. Burned small
+    // and JUMBO trees draw a fencing_burnt sprite (IsoGridSquare.BurnWalls).
     private static TreeProfile fallback(Texture tex) {
         float top = tex.getOffsetY();
         float base = top + tex.getHeight();
         float h = base - top;
-        return new TreeProfile(base, top, base - 0.2f * h, true, top, base - 0.35f * h, false, base - 0.05f * h,
-                coniferByName(tex.getName()));
+        String name = tex.getName();
+        boolean burnt = name != null && name.startsWith("fencing_burnt");
+        return new TreeProfile(base, top, base - 0.2f * h, !burnt, false, base - 0.05f * h, coniferByName(name));
     }
 
     static TreeProfile of(Texture tex) {

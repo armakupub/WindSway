@@ -55,6 +55,7 @@ import zombie.iso.sprite.IsoSprite;
 import zombie.iso.sprite.IsoSpriteInstance;
 import zombie.iso.weather.ClimateManager;
 import zombie.iso.weather.fx.WeatherFxMask;
+import zombie.popman.ObjectPool;
 import zombie.tileDepth.TileDepthMapManager;
 import zombie.tileDepth.TileDepthTexture;
 import zombie.tileDepth.TileDepthTextureManager;
@@ -73,13 +74,13 @@ public class WindSwayMod {
     // The two option sliders: remap bases for the plant channel
     // (getWindTickFinal, Patch_ClimateManager) and the tree channel
     // (TreeSway). Vanilla wind sits near zero for hours on calm days.
-    public static volatile double windFloor = 0.1;
+    public static volatile double windFloor = 0.2;
 
     public static void setWindFloor(double v) {
         windFloor = v;
     }
 
-    public static volatile double treeWindFloor = 0.1;
+    public static volatile double treeWindFloor = 0.2;
 
     public static void setTreeWindFloor(double v) {
         treeWindFloor = v;
@@ -88,6 +89,13 @@ public class WindSwayMod {
     // Console tuning hooks.
     public static void setTreeWarp(boolean v) {
         TreeRenderer.warp = v;
+    }
+
+    // Workshop videos: no player see-through mask, trees never fade.
+    public static volatile boolean videoMode = false;
+
+    public static void setVideoMode(boolean v) {
+        videoMode = v;
     }
 
     public static void setTreeSharp(double v) {
@@ -129,16 +137,14 @@ public class WindSwayMod {
         TreeRenderer.leafSizePow = pow;
     }
 
-    public static void setTreeBranch(double floorPx, double fracOfLean, double maxPx, double hz) {
+    public static void setTreeBranch(double floorPx, double fracOfLean, double maxPx) {
         TreeRenderer.branchFloor = floorPx;
         TreeRenderer.branchFrac = fracOfLean;
         TreeRenderer.branchMax = maxPx;
-        TreeRenderer.branchHz = hz;
     }
 
-    public static void setTreeBranchStorm(double px, double hz) {
+    public static void setTreeBranchStorm(double px) {
         TreeRenderer.branchStorm = px;
-        TreeRenderer.branchHzStorm = hz;
     }
 
     public static void setTreeBranchCell(double fracOfWidth, double minPx) {
@@ -146,14 +152,103 @@ public class WindSwayMod {
         TreeRenderer.branchCellMin = minPx;
     }
 
+    public static void setTreeBranchGate(double onset, double full, double gustBase, double energyRate, double wind) {
+        TreeRenderer.branchOnset = onset;
+        TreeRenderer.branchFull = full;
+        TreeRenderer.branchGustBase = gustBase;
+        TreeRenderer.lobeRate = energyRate;
+        TreeRenderer.lobeWind = wind;
+    }
+
+    public static void setTreeLobeRate(double hz, double refCellPx, double exponent, double spread) {
+        TreeSway.lobeHz = hz;
+        TreeRenderer.lobeRefCell = refCellPx;
+        TreeRenderer.lobeRateExp = exponent;
+        TreeRenderer.lobeFreqSpread = spread;
+    }
+
+    public static void setTreeLeafGust(double base, double rateSpread, double windFull, double windDens) {
+        TreeRenderer.leafGustBase = base;
+        TreeRenderer.leafRateSpread = rateSpread;
+        TreeRenderer.leafWindFull = windFull;
+        TreeRenderer.leafWindDens = windDens;
+    }
+
+    public static void setTreeLeafMask(double strength, double cellPx, double driftCellsPerSecond, double floor) {
+        TreeRenderer.leafMaskStrength = strength;
+        TreeRenderer.leafMaskCell = cellPx;
+        TreeSway.maskRate = driftCellsPerSecond;
+        TreeRenderer.leafMaskFloor = floor;
+    }
+
+    public static void setTreeTurbulence(double lengthTiles1, double lengthTiles2, double localRate) {
+        TreeSway.turbLen1 = lengthTiles1;
+        TreeSway.turbLen2 = lengthTiles2;
+        TreeSway.turbLocalRate = localRate;
+    }
+
+    public static void setTreeTurbulenceMix(double octave1, double octave2, double local, double contrast) {
+        TreeSway.turbMix1 = octave1;
+        TreeSway.turbMix2 = octave2;
+        TreeSway.turbMixLocal = local;
+        TreeSway.turbContrast = contrast;
+    }
+
+    public static void setTreeFront(double speed, double speedWind) {
+        TreeSway.frontSpeed = speed;
+        TreeSway.frontSpeedWind = speedWind;
+    }
+
+    public static void setTreeResponse(double sensitivitySpread, double thresholdMax, double curve, double inertia,
+                                       double curveStorm) {
+        TreeSway.sensSpread = sensitivitySpread;
+        TreeSway.thresholdMax = thresholdMax;
+        TreeSway.responseCurve = curve;
+        TreeSway.leanSmooth = inertia;
+        TreeSway.responseCurveStorm = curveStorm;
+    }
+
+    public static void setTreeRing(double gain, double rate, double knee, double memory, double lagSeconds) {
+        TreeSway.ringGain = gain;
+        TreeSway.ringRate = rate;
+        TreeSway.ringKnee = knee;
+        TreeSway.ringMemory = memory;
+        TreeSway.ringLag = lagSeconds;
+    }
+
+    public static void setTreeRingWind(double wind, double rest, double fast, double upwindCap) {
+        TreeSway.ringWind = wind;
+        TreeSway.ringRest = rest;
+        TreeSway.ringFast = fast;
+        TreeSway.upwindCap = upwindCap;
+    }
+
+    public static void setTreeLeafLook(double shade, double cellExp, double gustDens, double shadeRate) {
+        TreeRenderer.leafShade = shade;
+        TreeRenderer.leafCellExp = cellExp;
+        TreeRenderer.leafGustDens = gustDens;
+        TreeRenderer.leafShadeRate = shadeRate;
+    }
+
     public static void setTreeCrown(double knee, double lobeYFrac) {
         TreeRenderer.crownKnee = knee;
         TreeRenderer.branchYFrac = lobeYFrac;
     }
 
-    public static void setTreeSway(double ampMax, double ampPow) {
+    public static void setTreeCrownShape(double tail, double shorten, double tilt) {
+        TreeRenderer.crownTail = tail;
+        TreeRenderer.crownShorten = shorten;
+        TreeRenderer.crownTilt = tilt;
+    }
+
+    public static void setTreeLeanMean(double meanPerWind) {
+        TreeSway.meanLean = meanPerWind;
+    }
+
+    public static void setTreeSway(double ampMax, double ampPow, double ampFloor) {
         TreeSway.ampMax = ampMax;
         TreeSway.ampPow = ampPow;
+        TreeSway.ampFloor = ampFloor;
     }
 
     public static void setBushSway(double ampMax, double pow, double periodSeconds) {
@@ -173,6 +268,26 @@ public class WindSwayMod {
         TreeSway.plantStiff3 = type3;
     }
 
+    public static void setPlantShape(double bendPow, double shorten, double bladeCellPx, double bladeVar) {
+        TreeSway.plantBendPow = bendPow;
+        TreeSway.plantShorten = shorten;
+        TreeSway.plantBladeCell = bladeCellPx;
+        TreeSway.plantBladeVar = bladeVar;
+    }
+
+    public static void setPlantMean(double meanPerWind) {
+        TreeSway.plantMean = meanPerWind;
+    }
+
+    public static void setPlantBarrier(double capPx) {
+        TreeSway.plantBarrierCap = capPx;
+    }
+
+    public static void setPlantGate(double start, double slope) {
+        TreeSway.plantGateStart = Math.max(0.0, Math.min(1.0, start));
+        TreeSway.plantGateSlope = Math.max(0.0, Math.min(1.0, slope));
+    }
+
     public static void setTreeStormSway(double onset, double gain, double hold) {
         TreeSway.stormOnset = onset;
         TreeSway.stormGain = gain;
@@ -185,20 +300,8 @@ public class WindSwayMod {
         TreeSway.stormSpeedup = stormSpeedup;
     }
 
-    public static void setTreeGust(double gain, double lengthTiles, double speed, double speedWind) {
-        TreeSway.gustGain = gain;
-        TreeSway.gustLength = lengthTiles;
-        TreeSway.gustSpeed = speed;
-        TreeSway.gustSpeedWind = speedWind;
-    }
-
     public static void setTreeDir(double smoothSeconds) {
         TreeSway.dirSmooth = smoothSeconds;
-    }
-
-    public static void setTreeTempo(double calm, double storm) {
-        TreeSway.tempoCalm = calm;
-        TreeSway.tempoStorm = storm;
     }
 
     public static void setTreeSwayTempo(double calm, double storm) {
@@ -220,16 +323,43 @@ public class WindSwayMod {
         TreeRenderer.giantFull = full;
     }
 
-    public static void setTreeConifer(double leafAmp, double leafHz, double lobeAmp) {
+    public static void setTreeConifer(double leafAmp, double leafHz, double lobeAmp, double leafAmpStorm, double leafHzStorm) {
         TreeRenderer.coniferLeafAmp = leafAmp;
         TreeRenderer.coniferLeafHz = leafHz;
         TreeRenderer.coniferLobeAmp = lobeAmp;
+        TreeRenderer.coniferLeafAmpStorm = leafAmpStorm;
+        TreeRenderer.coniferLeafHzStorm = leafHzStorm;
+    }
+
+    public static void setTreeConiferLobes(double xFactor, double yFrac, double tierAspect, double ramp, double yStorm) {
+        TreeRenderer.coniferLobeX = xFactor;
+        TreeRenderer.coniferLobeY = yFrac;
+        TreeRenderer.coniferTierAspect = tierAspect;
+        TreeRenderer.coniferLobeRamp = ramp;
+        TreeRenderer.coniferLobeYStorm = yStorm;
+    }
+
+    public static void setTreeConiferTierMin(double px, double refH) {
+        TreeRenderer.coniferLobeMinPx = px;
+        TreeRenderer.coniferLobeMinRefH = refH;
+    }
+
+    public static void setTreeConiferTierShape(double trunk, double pow) {
+        TreeRenderer.coniferTierTrunk = trunk;
+        TreeRenderer.coniferTierPow = pow;
     }
 
     public static void setTreeConiferShape(double leanFactor, double start, double bendPow) {
         TreeRenderer.coniferLean = leanFactor;
         TreeRenderer.coniferStart = start;
         TreeRenderer.coniferBendPow = bendPow;
+    }
+
+    public static void setTreeBare(double leanFactor, double bendPow, double lobeFactor, double cellFactor) {
+        TreeRenderer.bareLean = leanFactor;
+        TreeRenderer.bareBendPow = bendPow;
+        TreeRenderer.bareLobe = lobeFactor;
+        TreeRenderer.bareCell = cellFactor;
     }
 
     public static void setTreeJitter(double v) {
@@ -240,6 +370,22 @@ public class WindSwayMod {
         TreeRenderer.mainOn = main;
         TreeRenderer.branchOn = branch;
         TreeRenderer.leafOn = leaf;
+    }
+
+    public static void setTreeQuality(boolean lobes, boolean octave2, boolean leaves, boolean mask, boolean shade) {
+        TreeRenderer.qualLobes = lobes;
+        TreeRenderer.qualOctave2 = octave2;
+        TreeRenderer.qualLeaves = leaves;
+        TreeRenderer.qualMask = mask;
+        TreeRenderer.qualShade = shade;
+    }
+
+    public static volatile boolean plantBendOn = true;
+    public static volatile boolean plantPadOn = true;
+
+    public static void setPlantQuality(boolean bend, boolean pad) {
+        plantBendOn = bend;
+        plantPadOn = pad;
     }
 
     private static Field rawWindTickField;
@@ -310,8 +456,8 @@ public class WindSwayMod {
             double raw = rawWindTick();
             double tf = treeWindFloor;
             double pf = windFloor;
-            double treeCh = tf > 0.0 ? tf + (1.0 - tf) * raw : raw;
-            double plantCh = pf > 0.0 ? pf + (1.0 - pf) * raw : raw;
+            double treeCh = Math.max(tf, raw);
+            double plantCh = Math.max(pf, raw);
             double gT = rustleGain(Math.max(0.0, Math.min(1.0, (treeCh - 0.08) / 0.92)));
             double gP = rustleGain(Math.max(0.0, Math.min(1.0, (plantCh - 0.02) / 0.98)));
             lastRustleGain = gT;
@@ -475,6 +621,35 @@ public class WindSwayMod {
         debugLog = v;
     }
 
+    public static void setTreeLod(double px) {
+        TreeRenderer.lodMinPx = Math.max(0.0, px);
+    }
+
+    public static void setGpuTimer(boolean v) {
+        GpuTimer.enabled = v;
+    }
+
+    public static void setGrassVao(boolean v) {
+        WindSwayGrassDrawer.useVao = v;
+    }
+
+    public static void setGrassSlots(int n) {
+        WindSwayGrassDrawer.slotsWanted = Math.max(1, Math.min(WindSwayGrassDrawer.MAX_SLOTS, n));
+    }
+
+    // mode -1 auto, 0 bypass, 1 copy_image, 2 blit; a change rebuilds the atlas.
+    public static void setDepthAtlas(int mode, int size) {
+        int m = Math.max(-1, Math.min(2, mode));
+        boolean rebuild = (m > 0 && m != DepthAtlas.modeWanted) || (size > 0 && size != DepthAtlas.sizeWanted);
+        DepthAtlas.modeWanted = m;
+        if (size > 0) DepthAtlas.sizeWanted = size;
+        if (rebuild) DepthAtlas.reinit = true;
+    }
+
+    public static void setDepthAtlas(int mode) {
+        setDepthAtlas(mode, 0);
+    }
+
     private static volatile boolean enqueueFailedLogged = false;
     private static volatile boolean captureFailedLogged = false;
     private static volatile boolean firstCaptureLogged = false;
@@ -484,6 +659,8 @@ public class WindSwayMod {
     private static ArrayList<WindSwayGrassDrawer.GrassQuad> pendingQuads = new ArrayList<>();
     private static long lastWindLog = 0L;
     private static int diagAlphaSkips = 0;
+    private static int lastFrameCount = -1;
+    private static int frames5s = 0;
 
     // Diagnostic: counts and names objects handed back to vanilla.
     private static final HashMap<String, Integer> rejectCounts = new HashMap<>();
@@ -552,8 +729,8 @@ public class WindSwayMod {
     }
 
     private static void extendPendingBounds(WindSwayGrassDrawer.GrassQuad q) {
-        float x0 = q.ox + Math.min(q.ox1, q.ox4) * q.w;
-        float x1 = q.ox + q.w + Math.max(q.ox2, q.ox3) * q.w;
+        float x0 = q.ox - q.padL + Math.min(q.ox1, q.ox4) * q.w;
+        float x1 = q.ox + q.w + q.padR + Math.max(q.ox2, q.ox3) * q.w;
         float y0 = q.oy + Math.min(q.oy1, q.oy2) * q.h;
         float y1 = q.oy + q.h + Math.max(q.oy3, q.oy4) * q.h;
         if (!pendBoundsValid) {
@@ -568,6 +745,69 @@ public class WindSwayMod {
             pendMinY = Math.min(pendMinY, y0);
             pendMaxY = Math.max(pendMaxY, y1);
         }
+    }
+
+    static volatile boolean flushPrecise = true;
+
+    public static void setFlushPrecise(boolean v) {
+        flushPrecise = v;
+    }
+
+    private static final float[] objRect = new float[4];
+    private static final float OBJ_SLACK = 96.0f;
+
+    // Tile frame of a vanilla-drawn object, x1 y1 x2 y2 in offscreen px: anchor
+    // minus sprite offsets, untrimmed texture size, a margin for attachments.
+    private static boolean objectRect(IsoObject object, IsoGridSquare square, float[] out) {
+        IsoSprite sprite = object.getSprite();
+        if (sprite == null) return false;
+        IsoSpriteInstance inst = sprite.def;
+        float ix = inst != null ? inst.offX : 0.0f;
+        float iy = inst != null ? inst.offY : 0.0f;
+        float iz = inst != null ? inst.offZ : 0.0f;
+        float sx = IsoUtils.XToScreen(square.x + ix, square.y + iy, square.z + iz, 0)
+                - IsoCamera.frameState.offX - object.offsetX;
+        float sy = IsoUtils.YToScreen(square.x + ix, square.y + iy, square.z + iz, 0)
+                - IsoCamera.frameState.offY - (object.offsetY + object.getRenderYOffset() * (float) Core.tileScale);
+        float w = 64.0f * Core.tileScale;
+        float h = 128.0f * Core.tileScale;
+        Texture tex = sprite.getTextureForCurrentFrame(object.getDir(), object);
+        if (tex != null) {
+            w = Math.max(w, tex.getWidthOrig());
+            h = Math.max(h, tex.getHeightOrig());
+        }
+        out[0] = sx - OBJ_SLACK;
+        out[1] = sy - OBJ_SLACK;
+        out[2] = sx + w + OBJ_SLACK;
+        out[3] = sy + h + OBJ_SLACK;
+        return true;
+    }
+
+    private static boolean rectsHitPending(float[] r, int n) {
+        if (!pendBoundsValid) return false;
+        for (int i = 0; i < n; ++i) {
+            if (r[i * 4] < pendMaxX && r[i * 4 + 2] > pendMinX
+                    && r[i * 4 + 1] < pendMaxY && r[i * 4 + 3] > pendMinY) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean rectsHitQuads(float[] r, int n) {
+        for (int k = 0; k < pendingQuads.size(); ++k) {
+            WindSwayGrassDrawer.GrassQuad q = pendingQuads.get(k);
+            float x0 = q.ox - q.padL + Math.min(q.ox1, q.ox4) * q.w;
+            float x1 = q.ox + q.w + q.padR + Math.max(q.ox2, q.ox3) * q.w;
+            float y0 = q.oy + Math.min(q.oy1, q.oy2) * q.h;
+            float y1 = q.oy + q.h + Math.max(q.oy3, q.oy4) * q.h;
+            for (int i = 0; i < n; ++i) {
+                if (r[i * 4] < x1 && r[i * 4 + 2] > x0 && r[i * 4 + 1] < y1 && r[i * 4 + 3] > y0) {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 
     private static void flushPending() {
@@ -587,24 +827,41 @@ public class WindSwayMod {
         }
     }
 
-    // Flush the pending batch before a no-depth-write vanilla translucent
-    // that can touch it. Trees and character models write depth and need
-    // no flush.
+    // Flush before a no-depth-write vanilla translucent that can touch the
+    // pending batches: held trees first (paint order), then the grass. Trees
+    // and character models write depth and need none.
     public static void onVanillaTranslucentDraw(IsoObject object, boolean doorOrWall) {
         try {
-            if (pendingQuads.isEmpty()) return;
+            if (pendingQuads.isEmpty() && pendingTrees == null) return;
             if (!FBORenderCell.instance.renderTranslucentOnly) return;
             if (object instanceof IsoTree) return;
             IsoGridSquare square = object != null ? object.getSquare() : null;
             if (square == null) {
+                flushPendingTrees(FLUSH_TREES_OBJ);
                 noteFlushTrigger(object, doorOrWall);
                 flushPending();
                 return;
             }
             float ax = IsoUtils.XToScreen(square.x, square.y, square.z, 0) - IsoCamera.frameState.offX;
             float ay = IsoUtils.YToScreen(square.x, square.y, square.z, 0) - IsoCamera.frameState.offY;
-            if (ax + OVERLAP_PAD < pendMinX || ax - OVERLAP_PAD > pendMaxX
-                    || ay + OVERLAP_PAD < pendMinY || ay - OVERLAP_PAD > pendMaxY) {
+            boolean precise = flushPrecise && objectRect(object, square, objRect);
+            if (pendingTrees != null) {
+                boolean hit = precise
+                        ? TreeRenderer.anyTreeHits(pendingTrees, objRect)
+                        : !(ax + TREE_OVERLAP_PAD < treeMinX || ax - TREE_OVERLAP_PAD > treeMaxX
+                                || ay + TREE_OVERLAP_PAD < treeMinY || ay - TREE_OVERLAP_PAD > treeMaxY);
+                if (hit) {
+                    flushPendingTrees(FLUSH_TREES_OBJ);
+                } else if (debugLog) {
+                    treeGateSkip5s++;
+                }
+            }
+            if (pendingQuads.isEmpty()) return;
+            boolean hitGrass = precise
+                    ? rectsHitQuads(objRect, 1)
+                    : !(ax + OVERLAP_PAD < pendMinX || ax - OVERLAP_PAD > pendMaxX
+                            || ay + OVERLAP_PAD < pendMinY || ay - OVERLAP_PAD > pendMaxY);
+            if (!hitGrass) {
                 if (debugLog) gateSkip5s++;
                 return;
             }
@@ -613,25 +870,222 @@ public class WindSwayMod {
         } catch (Throwable t) {
             // Ordering beats batching: if the bounds test dies, draw what
             // we have.
+            flushPendingTrees(FLUSH_TREES_OBJ);
             flushPending();
         }
     }
 
-    // Trees write depth even where they draw see-through (stencil hole,
-    // fade, cutaway); grass captured before such a tree has to be queued
-    // ahead of it, as vanilla's paint order would. Opaque lists need no
-    // flush: depth culling under an opaque crown equals being painted over.
-    public static void onTreeListDraw(Object drawer) {
+    // Tree list merge. Vanilla cuts FBORenderTrees.current at every non-tree
+    // translucent in paint order (hundreds of one-tree lists per frame in a
+    // forest). Lists are held (drawGeneric skipped) and merged into one
+    // pending list, queued when something that must paint after them arrives.
+    // Valid because everything between two opaque lists depth-tests against
+    // the trees and writes no depth. A see-through tree breaks that for the
+    // grass captured before it: such a list flushes trees and grass first and
+    // becomes the new pending list. Tree objects come from one ownerless pool.
+    private static FBORenderTrees pendingTrees;
+    private static int pendingTreeFrame = -1;
+    private static boolean treeFlushing;
+    private static float treeMinX;
+    private static float treeMinY;
+    private static float treeMaxX;
+    private static float treeMaxY;
+    // Screen reach from the SE anchor: an XXL frame is 896 x 1024 scene px
+    // plus the pad.
+    private static final float TREE_OVERLAP_PAD = 1600.0f;
+    private static final int FLUSH_TREES_OBJ = 0;
+    private static final int FLUSH_TREES_SEE = 1;
+    private static final int FLUSH_TREES_PASS = 2;
+    private static Field treePoolField;
+    private static boolean treePoolOk = true;
+    private static boolean mergeOk = true;
+    private static int held5s;
+    private static int merged5s;
+    private static int treeFlushObj5s;
+    private static int treeFlushSee5s;
+    private static int treeFlushPass5s;
+    private static int treeGateSkip5s;
+    private static int mergedTrees5s;
+    private static int mergedMax5s;
+    private static int seeStencil5s;
+    private static int seeTransp5s;
+    private static int seeFade5s;
+    private static int seeCut5s;
+    // Dry run of the see-through flush skip.
+    private static int seeLists5s;
+    private static int seeSkipRect5s;
+    private static int seeSkipBbox5s;
+    private static int seeSkipQuad5s;
+    private static final float[] holeRects = new float[8];
+    private static final float[] seeRects = new float[64 * 4];
+
+    // skipOn advice on SpriteRenderer.drawGeneric: true = the list is held.
+    public static boolean onTreeListDraw(Object drawer) {
+        if (!(drawer instanceof FBORenderTrees)) return false;
+        if (treeFlushing) return false;
         try {
-            if (pendingQuads.isEmpty()) return;
-            if (!(drawer instanceof FBORenderTrees)) return;
-            if (!FBORenderCell.instance.renderTranslucentOnly) return;
-            if (!TreeRenderer.hasSeeThrough((FBORenderTrees) drawer)) return;
-            if (debugLog) flushTree5s++;
-            flushPending();
+            if (!FBORenderCell.instance.renderTranslucentOnly) return false;
+            FBORenderTrees list = (FBORenderTrees) drawer;
+            int seeKind = TreeRenderer.seeThroughKind(list);
+            boolean seeThrough = seeKind != 0;
+            // A see-through list needs the grass flush only where its see-through
+            // pixels meet a pending quad.
+            boolean seeFlush = seeThrough;
+            if (seeThrough && flushPrecise) {
+                int holeN = StencilHole.rects(holeRects);
+                int n = TreeRenderer.seeThroughRects(list, holeRects, holeN, seeRects);
+                boolean bboxHit = n != 0 && (n < 0 || rectsHitPending(seeRects, n));
+                boolean quadHit = bboxHit && (n < 0 || rectsHitQuads(seeRects, n));
+                seeFlush = quadHit;
+                if (debugLog) {
+                    if (n == 0) seeSkipRect5s++;
+                    else if (!bboxHit) seeSkipBbox5s++;
+                    else if (!quadHit) seeSkipQuad5s++;
+                }
+            }
+            if (debugLog && seeThrough) {
+                seeLists5s++;
+                if ((seeKind & TreeRenderer.SEE_STENCIL) != 0) seeStencil5s++;
+                if ((seeKind & TreeRenderer.SEE_TRANSPARENT) != 0) seeTransp5s++;
+                if ((seeKind & TreeRenderer.SEE_FADE) != 0) seeFade5s++;
+                if ((seeKind & TreeRenderer.SEE_CUTAWAY) != 0) seeCut5s++;
+            }
+            if (!enabled || !mergeOk || !TreeRenderer.active()) {
+                // Vanilla draws the lists; only the grass order matters.
+                if (seeFlush && !pendingQuads.isEmpty()) {
+                    if (debugLog) flushTree5s++;
+                    flushPending();
+                }
+                return false;
+            }
+            int frame = IsoCamera.frameState.frameCount;
+            if (pendingTrees != null && pendingTreeFrame != frame) {
+                // A pass that ended without its OnExit left this behind.
+                trace("stale tree list dropped");
+                recycleList(pendingTrees);
+                pendingTrees = null;
+            }
+            if (seeFlush) {
+                flushPendingTrees(FLUSH_TREES_SEE);
+                if (!pendingQuads.isEmpty()) {
+                    if (debugLog) flushTree5s++;
+                    flushPending();
+                }
+            }
+            ArrayList<?> src = TreeRenderer.trees(list);
+            if (src.isEmpty()) return false;
+            if (pendingTrees == null) {
+                pendingTrees = list;
+                pendingTreeFrame = frame;
+                treeMinX = Float.MAX_VALUE;
+                treeMinY = Float.MAX_VALUE;
+                treeMaxX = -Float.MAX_VALUE;
+                treeMaxY = -Float.MAX_VALUE;
+                extendTreeBounds(src, 0);
+                if (debugLog) held5s++;
+                return true;
+            }
+            ArrayList<?> dst = TreeRenderer.trees(pendingTrees);
+            int at = dst.size();
+            @SuppressWarnings("unchecked")
+            ArrayList<Object> dstObj = (ArrayList<Object>) dst;
+            dstObj.addAll(src);
+            extendTreeBounds(dst, at);
+            src.clear();
+            recycleList(list);
+            if (debugLog) merged5s++;
+            return true;
         } catch (Throwable t) {
+            mergeOk = false;
+            trace("tree list merge disabled: " + t, t);
+            flushPendingTrees(FLUSH_TREES_OBJ);
             flushPending();
+            return false;
         }
+    }
+
+    private static void extendTreeBounds(ArrayList<?> trees, int from) throws Throwable {
+        float offX = IsoCamera.frameState.offX;
+        float offY = IsoCamera.frameState.offY;
+        for (int i = from; i < trees.size(); ++i) {
+            Object tree = trees.get(i);
+            float tx = TreeRenderer.treeX(tree);
+            float ty = TreeRenderer.treeY(tree);
+            float tz = TreeRenderer.treeZ(tree);
+            float ax = IsoUtils.XToScreen(tx, ty, tz, 0) - offX;
+            float ay = IsoUtils.YToScreen(tx, ty, tz, 0) - offY;
+            if (ax < treeMinX) treeMinX = ax;
+            if (ax > treeMaxX) treeMaxX = ax;
+            if (ay < treeMinY) treeMinY = ay;
+            if (ay > treeMaxY) treeMaxY = ay;
+        }
+    }
+
+    // Back to FBORenderTrees.s_pool (package-private); a list never queued is
+    // otherwise garbage, not a double release.
+    private static void recycleList(FBORenderTrees list) {
+        if (!treePoolOk) return;
+        try {
+            Field f = treePoolField;
+            if (f == null) {
+                f = Accessor.findField(FBORenderTrees.class, "s_pool");
+                if (f == null) throw new NoSuchFieldException("s_pool");
+                f.setAccessible(true);
+                treePoolField = f;
+            }
+            if (!TreeRenderer.trees(list).isEmpty()) return;
+            @SuppressWarnings("unchecked")
+            ObjectPool<FBORenderTrees> pool = (ObjectPool<FBORenderTrees>) f.get(null);
+            pool.release(list);
+        } catch (Throwable t) {
+            treePoolOk = false;
+            trace("tree list recycling disabled: " + t);
+        }
+    }
+
+    private static void flushPendingTrees(int cause) {
+        FBORenderTrees list = pendingTrees;
+        if (list == null) return;
+        pendingTrees = null;
+        treeFlushing = true;
+        try {
+            if (debugLog) {
+                int n = 0;
+                try {
+                    n = TreeRenderer.trees(list).size();
+                } catch (Throwable ignored) {
+                }
+                mergedTrees5s += n;
+                if (n > mergedMax5s) mergedMax5s = n;
+                if (cause == FLUSH_TREES_OBJ) treeFlushObj5s++;
+                else if (cause == FLUSH_TREES_SEE) treeFlushSee5s++;
+                else treeFlushPass5s++;
+            }
+            SpriteRenderer.instance.drawGeneric(list);
+        } finally {
+            treeFlushing = false;
+        }
+    }
+
+    // Screen-right is world (+1, -1): a blade bent that way crosses the W edge
+    // of column x+1 or the N edge of row y; screen-left mirrors it. Bits 2
+    // (left) / 4 (right) mark a fence or wall on one of those edges.
+    private static float barrierCode(IsoGridSquare sq) {
+        float code = 0.0f;
+        if (edge(sq, 0, 0, true) || edge(sq, 0, 1, true) || edge(sq, 0, 1, false) || edge(sq, -1, 1, false)) {
+            code += 2.0f;
+        }
+        if (edge(sq, 1, 0, true) || edge(sq, 1, -1, true) || edge(sq, 0, 0, false) || edge(sq, 1, 0, false)) {
+            code += 4.0f;
+        }
+        return code;
+    }
+
+    private static boolean edge(IsoGridSquare from, int dx, int dy, boolean west) {
+        IsoGridSquare s = from.getCell().getGridSquare(from.x + dx, from.y + dy, from.z);
+        if (s == null) return false;
+        return west ? s.has(IsoFlagType.cutW) || s.has(IsoFlagType.collideW)
+                : s.has(IsoFlagType.cutN) || s.has(IsoFlagType.collideN);
     }
 
     // skipOn advice (Patch_FBORenderCell): true = engine skips the
@@ -823,8 +1277,28 @@ public class WindSwayMod {
 
             // Corner fractions get copied in buildPart: the shared pools
             // mutate on the game thread while the render thread draws.
-            // Trample beats wind, as in performRenderFrame.
+            // Trample beats wind, as in performRenderFrame. Wind flora without a
+            // trample bends in the shader: pool corners dropped, sway parameters on
+            // the vertices.
             ObjectRenderEffects ore = object.getObjectRenderEffectsToApply();
+            float windS = 0.0f;
+            float windSeed = 0.0f;
+            float windFrac = 0.0f;
+            float windPeriod = 0.0f;
+            if (sprite.moveWithWind && ore == object.getWindRenderEffects() && !rigidFlora(sprite)) {
+                ore = null;
+                windS = (float) ((square.x - square.y) / SQRT2);
+                windSeed = TreeSway.hash(square.x * 7919 + square.y * 104729 + square.z * 31 + sprite.tileSheetIndex, 9);
+                if (sprite.isBush) {
+                    windFrac = (float) TreeSway.bushAmpMax;
+                    windPeriod = (float) TreeSway.bushPeriod;
+                } else {
+                    double stiff = sprite.windType == 2 ? TreeSway.plantStiff2
+                            : (sprite.windType == 3 ? TreeSway.plantStiff3 : 1.0);
+                    windFrac = (float) (TreeSway.plantAmpMax * stiff);
+                    windPeriod = (float) (TreeSway.plantPeriod / (0.7 + 0.3 * stiff));
+                }
+            }
 
             ArrayList<WindSwayGrassDrawer.GrassQuad> parts = new ArrayList<>(2 + attachedCount);
             parts.add(buildPart(tex, mainDepthTex, sprite, baseSx, baseSy,
@@ -920,6 +1394,35 @@ public class WindSwayMod {
                         liR * fade * s.tintr, liG * fade * s.tintg, liB * fade * s.tintb, a2));
             }
 
+            // Every part bends in the main part's frame, so a flower child stays on
+            // its stalk.
+            if (windFrac > 0.0f) {
+                WindSwayGrassDrawer.GrassQuad main = parts.get(0);
+                float frameTop = main.oy;
+                float frameBottom = main.oy + main.h;
+                float frameLeft = main.ox;
+                float barrier = barrierCode(square);
+                // Lean with the wind, swing past upright only by the upwind cap
+                // (screen-right is downwind for dir > 0).
+                boolean right = TreeSway.dir >= 0.0;
+                for (int i = 0; i < parts.size(); ++i) {
+                    WindSwayGrassDrawer.GrassQuad q = parts.get(i);
+                    q.windS = windS;
+                    q.windSeed = windSeed;
+                    q.windPeriod = windPeriod;
+                    q.windAmp = q.w * windFrac;
+                    float down = plantPadOn ? TreeSway.plantReach(q.windAmp, true) : 0.0f;
+                    float up = plantPadOn ? TreeSway.plantReach(q.windAmp, false) : 0.0f;
+                    q.padL = right ? up : down;
+                    q.padR = right ? down : up;
+                    q.barrier = barrier;
+                    float tU = (q.u1 - q.u0) / q.w;
+                    float tV = (q.v1 - q.v0) / q.h;
+                    q.frameTop = q.v0 + (frameTop - q.oy) * tV;
+                    q.frameBottom = q.v0 + (frameBottom - q.oy) * tV;
+                    q.frameLeft = q.u0 + (frameLeft - q.ox) * tU;
+                }
+            }
             // Canary: if the pass advice never drains us (weave failure),
             // nothing captured ever gets drawn.
             if (pendingQuads.size() > 100000) {
@@ -966,6 +1469,15 @@ public class WindSwayMod {
             }
             return false;
         }
+    }
+
+    private static final double SQRT2 = Math.sqrt(2.0);
+
+    // fencing_burnt_01 trunks carry MoveWithWind without a tree flag: not
+    // grass.
+    private static boolean rigidFlora(IsoSprite sprite) {
+        String name = sprite.name;
+        return name != null && name.startsWith("fencing_burnt");
     }
 
     // Own render overrides draw something other than the tile sprite
@@ -1124,6 +1636,7 @@ public class WindSwayMod {
             if (debugLog && !pendingQuads.isEmpty()) {
                 flushPass5s++;
             }
+            flushPendingTrees(FLUSH_TREES_PASS);
             flushPending();
             WindSwayGrassDrawer.onPassDone();
             IsoWorld world = IsoWorld.instance;
@@ -1133,6 +1646,13 @@ public class WindSwayMod {
             }
             if (!enabled) return;
 
+            if (debugLog) {
+                int fc = IsoCamera.frameState.frameCount;
+                if (fc != lastFrameCount) {
+                    lastFrameCount = fc;
+                    frames5s++;
+                }
+            }
             long now = System.currentTimeMillis();
             if (debugLog && now - lastWindLog > 5000L) {
                 lastWindLog = now;
@@ -1140,8 +1660,59 @@ public class WindSwayMod {
                         ClimateManager.getWindTickFinal(), TreeSway.raw, TreeSway.w, TreeSway.dir, TreeSway.lastX, lastRustleGain, flushCount5s, flushQuads5s, maxBatch5s, diagAlphaSkips));
                 trace(String.format("flush causes: door=%d obj=%d tree=%d passEnd=%d | gateSkips=%d",
                         flushDoor5s, flushObj5s, flushTree5s, flushPass5s, gateSkip5s));
-                trace(String.format("trees: lists=%d trees=%d draws=%d maxList=%d",
-                        TreeRenderer.diagRenders, TreeRenderer.diagTrees, TreeRenderer.diagDraws, TreeRenderer.diagMaxTrees));
+                trace(String.format("trees: lists=%d trees=%d draws=%d binds=%d maxList=%d",
+                        TreeRenderer.diagRenders, TreeRenderer.diagTrees, TreeRenderer.diagDraws, TreeRenderer.diagBinds,
+                        TreeRenderer.diagMaxTrees));
+                TreeRenderer.diagBinds = 0;
+                trace(String.format("tree merge: held=%d merged=%d | flush obj=%d see=%d passEnd=%d | gateSkips=%d | trees/flush=%.1f max=%d | see lists: stencil=%d transp=%d fade=%d cut=%d",
+                        held5s, merged5s, treeFlushObj5s, treeFlushSee5s, treeFlushPass5s, treeGateSkip5s,
+                        mergedTrees5s / (double) Math.max(1, treeFlushObj5s + treeFlushSee5s + treeFlushPass5s), mergedMax5s,
+                        seeStencil5s, seeTransp5s, seeFade5s, seeCut5s));
+                trace(String.format("see skip: noRect=%d noBbox=%d noQuad=%d of %d lists",
+                        seeSkipRect5s, seeSkipBbox5s, seeSkipQuad5s, seeLists5s));
+                seeLists5s = 0;
+                seeSkipRect5s = 0;
+                seeSkipBbox5s = 0;
+                seeSkipQuad5s = 0;
+                seeStencil5s = 0;
+                seeTransp5s = 0;
+                seeFade5s = 0;
+                seeCut5s = 0;
+                held5s = 0;
+                merged5s = 0;
+                treeFlushObj5s = 0;
+                treeFlushSee5s = 0;
+                treeFlushPass5s = 0;
+                treeGateSkip5s = 0;
+                mergedTrees5s = 0;
+                mergedMax5s = 0;
+                int frames = Math.max(1, frames5s);
+                trace(String.format("gpu: trees %s | grass %s | frames=%d",
+                        TreeRenderer.gpuTimer.report(frames), WindSwayGrassDrawer.gpuTimer.report(frames), frames5s));
+                long grassNs = WindSwayGrassDrawer.cpuNs.getAndSet(0L);
+                long grassFillNs = WindSwayGrassDrawer.cpuFillNs.getAndSet(0L);
+                long grassRuns = WindSwayGrassDrawer.diagRuns.getAndSet(0L);
+                long grassBinds = WindSwayGrassDrawer.diagBinds.getAndSet(0L);
+                trace(String.format("cpu (render thread): tree build %.3f draw %.3f ms/frame | grass batch %.3f ms/frame (fill %.3f, gl %.3f, runs/batch %.1f, binds/batch %.1f) | depth atlas cells %d/%d copies %d",
+                        TreeRenderer.cpuBuildNs.getAndSet(0L) / 1.0e6 / frames,
+                        TreeRenderer.cpuDrawNs.getAndSet(0L) / 1.0e6 / frames,
+                        grassNs / 1.0e6 / frames,
+                        grassFillNs / 1.0e6 / frames,
+                        (grassNs - grassFillNs) / 1.0e6 / frames,
+                        grassRuns / (double) Math.max(1, flushCount5s),
+                        grassBinds / (double) Math.max(1, flushCount5s),
+                        DepthAtlas.diagCells, DepthAtlas.diagCapacity, DepthAtlas.diagCopies));
+                DepthAtlas.diagCopies = 0;
+                double perBatch = 1.0e3 / Math.max(1, flushCount5s);
+                trace(String.format("grass gl per batch (us): timer %.2f state %.2f upload %.2f attrib %.2f prog %.2f draw %.2f end %.2f",
+                        WindSwayGrassDrawer.cpuTimerNs.getAndSet(0L) * perBatch / 1.0e6,
+                        WindSwayGrassDrawer.cpuStateNs.getAndSet(0L) * perBatch / 1.0e6,
+                        WindSwayGrassDrawer.cpuUploadNs.getAndSet(0L) * perBatch / 1.0e6,
+                        WindSwayGrassDrawer.cpuAttribNs.getAndSet(0L) * perBatch / 1.0e6,
+                        WindSwayGrassDrawer.cpuProgNs.getAndSet(0L) * perBatch / 1.0e6,
+                        WindSwayGrassDrawer.cpuDrawNs.getAndSet(0L) * perBatch / 1.0e6,
+                        WindSwayGrassDrawer.cpuEndNs.getAndSet(0L) * perBatch / 1.0e6));
+                frames5s = 0;
                 TreeRenderer.diagRenders = 0;
                 TreeRenderer.diagTrees = 0;
                 TreeRenderer.diagDraws = 0;

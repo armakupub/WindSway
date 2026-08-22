@@ -47,4 +47,18 @@ public class Patch_FBORenderCell {
         }
     }
 
+    // Transparent floors and shore water take renderTranslucent's floor
+    // branch, the one non-tree draw passing neither method above; the
+    // IsoObject argument picks the overload.
+    @Patch(className = "zombie.iso.fboRenderChunk.FBORenderCell",
+           methodName = "renderFloor")
+    public static class Patch_renderFloor {
+
+        @Patch.OnEnter(skipOn = true)
+        public static boolean enter(@Patch.Argument(0) IsoObject object) {
+            WindSwayMod.onVanillaTranslucentDraw(object, false);
+            return false;
+        }
+    }
+
 }

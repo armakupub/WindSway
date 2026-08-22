@@ -39,21 +39,22 @@ modOptions:addDescription("Sway in still air. Wind adds on top.")
 
 -- No custom slider-label formatter (the setName shim is unreliable);
 -- the scale hint lives in the description.
+-- Renamed keys: saved values of the old additive floor must not carry over.
 local windFloorOpt = modOptions:addSlider(
-    "windFloor",
+    "plantBaseline",
     "Minimum sway (plants)",
     0.0, 0.5, 0.05,
-    0.1,
+    0.2,
     "0 = vanilla wind only.")
 windFloorOpt.onChangeApply = function(self, value)
     applyToJava("setWindFloor", value)
 end
 
 local treeWindFloorOpt = modOptions:addSlider(
-    "treeWindFloor",
+    "treeBaseline",
     "Minimum sway (trees)",
     0.0, 0.5, 0.05,
-    0.1,
+    0.2,
     "0 = vanilla wind only.")
 treeWindFloorOpt.onChangeApply = function(self, value)
     applyToJava("setTreeWindFloor", value)

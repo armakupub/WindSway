@@ -5,7 +5,10 @@ import java.lang.invoke.MethodHandles;
 import java.lang.invoke.MethodType;
 import java.lang.reflect.Field;
 import java.nio.ByteBuffer;
+import java.nio.FloatBuffer;
 import java.util.ArrayList;
+import java.util.IdentityHashMap;
+import java.util.concurrent.atomic.AtomicLong;
 
 import org.joml.Matrix4f;
 import org.joml.Vector3f;
@@ -30,6 +33,8 @@ import zombie.iso.IsoDepthHelper;
 import zombie.iso.PlayerCamera;
 import zombie.iso.fboRenderChunk.FBORenderChunk;
 import zombie.iso.fboRenderChunk.FBORenderChunkManager;
+import zombie.iso.IsoCamera;
+import zombie.iso.IsoUtils;
 import zombie.iso.fboRenderChunk.FBORenderTrees;
 
 // Replaces FBORenderTrees.render for on-screen tree lists: vanilla draws
@@ -56,45 +61,106 @@ public final class TreeRenderer {
     public static volatile double trunkFactor = 0.7;
     public static volatile double trunkStorm = 0.15;
     public static volatile double bendPow = 2.0;
-    public static volatile double bendPowStorm = 0.35;
+    public static volatile double bendPowStorm = 0.2;
     public static volatile double crownKnee = 0.3;
+    // Broadleaf bow above the trunk (profileRaw); the lean is the crown-centre
+    // displacement.
+    public static volatile double crownTail = 0.2;
+    // Bent branches shorten (crownShorten * dx^2 / W) and the crown tilts
+    // (crownTilt * dx / W).
+    public static volatile double crownShorten = 0.5;
+    public static volatile double crownTilt = 0.3;
     public static volatile double heightPow = 0.75;
-    // Leaf flutter, calm to storm, scaled by (content height / leafRefH)^pow.
-    public static volatile double leafAmp = 0.5;
+    public static volatile double leafAmp = 0.6;
     public static volatile double leafAmpStorm = 1.5;
-    public static volatile double leafHz = 4.5;
+    public static volatile double leafHz = 1.35;
     public static volatile double leafHzStorm = 4.0;
     public static volatile double leafCell = 6.0;
     public static volatile double leafRefH = 600.0;
     public static volatile double leafSizePow = 0.6;
-    // Crown lobes, calm to storm, plus a share of the lean, capped.
+    public static volatile double leafGustBase = 0.35;
+    public static volatile double leafRateSpread = 0.15;
+    // w >= 1 / leafWindFull: no breathing down; w >= 1 / leafWindDens: every
+    // cell on.
+    public static volatile double leafWindFull = 1.0;
+    public static volatile double leafWindDens = 1.0;
+    // Leaf mask: a cell flutters fully or not at all (a fraction of a pixel
+    // everywhere reads as heat haze).
+    public static volatile double leafMaskStrength = 1.0;
+    public static volatile double leafMaskCell = 96.0;
+    public static volatile double leafMaskFloor = 0.4;
+    // Leaf cell = leafCell * (branch cell / lobeRefCell)^leafCellExp.
+    public static volatile double leafCellExp = 0.2;
+    public static volatile double leafGustDens = 0.6;
+    public static volatile double leafShade = 0.03;
+    public static volatile double leafShadeRate = 0.25;
+    // Lobes: gated branchOnset..branchFull, driven by the change energy over
+    // lobeRate plus branchFrac of the lean.
     public static volatile double branchFloor = 0.35;
     public static volatile double branchStorm = 0.6;
-    public static volatile double branchFrac = 0.1;
+    public static volatile double branchFrac = 0.04;
     public static volatile double branchMax = 1.0;
-    public static volatile double branchHz = 0.8;
-    public static volatile double branchHzStorm = 1.0;
-    public static volatile double branchCellFrac = 0.6;
+    public static volatile double branchOnset = 0.12;
+    public static volatile double branchFull = 0.45;
+    public static volatile double branchGustBase = 0.1;
+    public static volatile double lobeRate = 0.35;
+    public static volatile double lobeWind = 1.0;
+    public static volatile double branchCellFrac = 0.22;
     public static volatile double branchCellMin = 32.0;
     public static volatile double branchYFrac = 0.25;
+    public static volatile double lobeRefCell = 32.0;
+    public static volatile double lobeRateExp = 0.35;
+    public static volatile double lobeFreqSpread = 0.4;
     // Jumbo boost from mid wind on, per-tree amplitude spread.
     public static volatile double giantBoost = 0.5;
-    public static volatile double giantOnset = 0.25;
-    public static volatile double giantFull = 0.7;
+    public static volatile double giantOnset = 0.0;
+    public static volatile double giantFull = 0.3;
     public static volatile double treeJitter = 0.15;
     // Evergreens: stiff needles, own lean factor, bend start no lower than
     // coniferStart of the content height (their measured crown line sits
     // near the ground), own exponent up to the tip.
     public static volatile double coniferLeafAmp = 0.35;
     public static volatile double coniferLeafHz = 0.7;
+    // The rate factor times the per-tree spread must stay below 2: the
+    // attribute packs it with g.
+    public static volatile double coniferLeafAmpStorm = 0.65;
+    public static volatile double coniferLeafHzStorm = 0.9;
     public static volatile double coniferLobeAmp = 1.0;
-    public static volatile double coniferLean = 1.0;
+    public static volatile double coniferLean = 1.6;
     public static volatile double coniferStart = 0.2;
-    public static volatile double coniferBendPow = 1.6;
+    public static volatile double coniferBendPow = 1.5;
+    // Evergreen lobes are branch tiers: mostly vertical, a tier moves as one,
+    // in over lobeRamp above the bend start; the vertical share loses
+    // lobeYStorm of itself toward w 1 (a steady bob at storm reads as jelly).
+    public static volatile double coniferLobeX = 0.5;
+    public static volatile double coniferLobeY = 0.8;
+    public static volatile double coniferTierAspect = 3.0;
+    public static volatile double coniferLobeRamp = 0.15;
+    public static volatile double coniferLobeYStorm = 0.7;
+    // Pixel floor for regular evergreens (width-scaled tiers sat below a
+    // pixel), reduced below lobeMinRefH.
+    public static volatile double coniferLobeMinPx = 1.2;
+    public static volatile double coniferLobeMinRefH = 220.0;
+    // Tiers pivot at the trunk: tierTrunk there, 1 at the half width.
+    public static volatile double coniferTierTrunk = 0.15;
+    public static volatile double coniferTierPow = 1.0;
+    // Bare broadleaf crowns (no foliage overlay): rod to the tip, lean and
+    // lobes as factors of the leafy tree's, finer lobe cell, no leaves.
+    public static volatile double bareLean = 0.6;
+    public static volatile double bareBendPow = 2.0;
+    public static volatile double bareLobe = 0.5;
+    public static volatile double bareCell = 0.6;
     // Diagnostic layer switches.
     public static volatile boolean mainOn = true;
     public static volatile boolean branchOn = true;
     public static volatile boolean leafOn = true;
+    // Shader stage switches (uQual): off = not computed, unlike the layer
+    // switches above.
+    public static volatile boolean qualLobes = true;
+    public static volatile boolean qualOctave2 = true;
+    public static volatile boolean qualLeaves = true;
+    public static volatile boolean qualMask = true;
+    public static volatile boolean qualShade = true;
     // Floor strip depth offset, linear from the split row to the frame
     // bottom. Vanilla subtracts a constant 0.0015 from the whole strip:
     // at the SE corner the tree base sits one square-centre step
@@ -109,6 +175,12 @@ public final class TreeRenderer {
     public static volatile int diagTrees;
     public static volatile int diagDraws;
     public static volatile int diagMaxTrees;
+    static final GpuTimer gpuTimer = new GpuTimer();
+    static final AtomicLong cpuBuildNs = new AtomicLong();
+    static final AtomicLong cpuDrawNs = new AtomicLong();
+    // Screen px under which a field is dropped (0 = never).
+    static volatile double lodMinPx = 0.0;
+    private static boolean glInfoLogged;
 
     private static volatile boolean ok = true;
     private static Shader shader;
@@ -158,6 +230,12 @@ public final class TreeRenderer {
     private static int uMode = -1;
     private static int uStepSize = -1;
     private static int uOutlineColor = -1;
+    private static int uMask = -1;
+    private static int uLobe = -1;
+    private static int uCrown = -1;
+    private static int uLeaf = -1;
+    private static int uQual = -1;
+    private static int uQual2 = -1;
 
     // Attribute layout, 8 x vec4 (location == slot):
     // 0 world position xyz + depth, 1 colour, 2 uv + height fraction +
@@ -172,6 +250,9 @@ public final class TreeRenderer {
     private static int streamVbo;
     private static int streamOffset;
     private static ByteBuffer stage = BufferUtils.createByteBuffer(512 * 1024);
+    private static FloatBuffer stageF = stage.asFloatBuffer();
+    private static final int FLOATS = STRIDE / 4;
+    private static final float[] quad = new float[4 * FLOATS];
 
     private static final int GROUP_OPAQUE = 0;
     private static final int GROUP_TRANSPARENT = 1;
@@ -185,6 +266,8 @@ public final class TreeRenderer {
         int first;
         int count;
         int group;
+        float pageW;
+        float pageH;
     }
 
     private static final ArrayList<Run> runs = new ArrayList<>(64);
@@ -211,6 +294,27 @@ public final class TreeRenderer {
         double t = (x - e0) / (e1 - e0);
         if (t < 0.0) t = 0.0; else if (t > 1.0) t = 1.0;
         return t * t * (3.0 - 2.0 * t);
+    }
+
+    // Broadleaf bow before normalisation, mirrors windsway_tree.frag.
+    private static double profileRaw(double x, double hc, double knee, double tail) {
+        if (x <= hc) return 0.0;
+        double sigma = knee - hc;
+        if (x <= knee) {
+            double u = (x - hc) / sigma;
+            double u2 = u * u;
+            return sigma * (u2 * u - 0.5 * u2 * u2);
+        }
+        double l = 1.0 - knee;
+        double y = x - knee;
+        return 0.5 * sigma + y + tail * y * y / (2.0 * l);
+    }
+
+    // Top over crown-centre displacement, for the pad.
+    private static double profileTop(double hc, double knee, double tail) {
+        double centre = knee + 0.5 * (1.0 - knee);
+        double dc = profileRaw(centre, hc, knee, tail);
+        return dc > 0.0 ? profileRaw(1.0, hc, knee, tail) / dc : 1.0;
     }
 
     // Tree is package-private, so its getters take Object; the list holder
@@ -259,21 +363,144 @@ public final class TreeRenderer {
         handlesReady = true;
     }
 
+    static ArrayList<?> trees(FBORenderTrees self) throws Throwable {
+        if (!handlesReady) initHandles();
+        return (ArrayList<?>) mhTrees.invokeExact(self);
+    }
+
+    static float treeX(Object tree) throws Throwable {
+        return (float) mhX.invokeExact(tree);
+    }
+
+    static float treeY(Object tree) throws Throwable {
+        return (float) mhY.invokeExact(tree);
+    }
+
+    static float treeZ(Object tree) throws Throwable {
+        return (float) mhZ.invokeExact(tree);
+    }
+
     // Game thread, before a tree list is queued: true when a tree of the
     // list draws see-through (stencil hole, fade, cutaway). Grass queued
     // after such a tree fails the depth test under its whole silhouette,
     // while vanilla's paint order lets grass behind it show through.
     static boolean hasSeeThrough(FBORenderTrees self) throws Throwable {
+        return seeThroughKind(self) != 0;
+    }
+
+    static final int SEE_STENCIL = 1;
+    static final int SEE_TRANSPARENT = 2;
+    static final int SEE_FADE = 4;
+    static final int SEE_CUTAWAY = 8;
+
+    // Bit set of the see-through causes present in the list.
+    static int seeThroughKind(FBORenderTrees self) throws Throwable {
+        if (WindSwayMod.videoMode) return 0;
+        if (!handlesReady) initHandles();
+        ArrayList<?> trees = (ArrayList<?>) mhTrees.invokeExact(self);
+        int kind = 0;
+        for (int i = 0; i < trees.size(); ++i) {
+            Object tree = trees.get(i);
+            boolean transparent = (boolean) mhTransparent.invokeExact(tree);
+            if (transparent) {
+                kind |= SEE_TRANSPARENT;
+            } else if ((boolean) mhUseStencil.invokeExact(tree)) {
+                kind |= SEE_STENCIL;
+            } else if ((float) mhFadeAlpha.invokeExact(tree) < 1.0f) {
+                kind |= SEE_FADE;
+            } else if ((float) mhCutawayAlpha.invokeExact(tree) < 1.0f) {
+                kind |= SEE_CUTAWAY;
+            }
+        }
+        return kind;
+    }
+
+    // Box slack in offscreen px: anchor vs sprite centre, sway pad, texture
+    // offsets.
+    private static final float BOX_SLACK_X = 256.0f;
+    private static final float BOX_SLACK_Y = 192.0f;
+
+    // Game thread. Screen rects (x1, y1, x2, y2, offscreen px) where the list
+    // draws see-through: a stencil tree's box clipped to the hole rects, a
+    // transparent or fading tree's whole box. -1 when out is full.
+    private static final float[] box = new float[4];
+
+    // Game thread. Conservative screen box of a tree, offscreen px.
+    private static void treeBox(Object tree, float[] out) throws Throwable {
+        Texture texture = (Texture) mhTexture.invokeExact(tree);
+        Texture texture2 = (Texture) mhTexture2.invokeExact(tree);
+        float w = 0.0f;
+        float h = 0.0f;
+        if (texture != null) {
+            w = Math.max(w, texture.getWidthOrig());
+            h = Math.max(h, texture.getHeightOrig());
+        }
+        if (texture2 != null) {
+            w = Math.max(w, texture2.getWidthOrig());
+            h = Math.max(h, texture2.getHeightOrig());
+        }
+        float tx = (float) mhX.invokeExact(tree);
+        float ty = (float) mhY.invokeExact(tree);
+        float tz = (float) mhZ.invokeExact(tree);
+        float ax = IsoUtils.XToScreen(tx, ty, tz, 0) - IsoCamera.frameState.offX;
+        float ay = IsoUtils.YToScreen(tx, ty, tz, 0) - IsoCamera.frameState.offY;
+        out[0] = ax - 0.5f * w - BOX_SLACK_X;
+        out[1] = ay - h - BOX_SLACK_Y;
+        out[2] = ax + 0.5f * w + BOX_SLACK_X;
+        out[3] = ay + BOX_SLACK_Y;
+    }
+
+    // Game thread. True when a tree of the list can touch the rect.
+    static boolean anyTreeHits(FBORenderTrees self, float[] r) throws Throwable {
         if (!handlesReady) initHandles();
         ArrayList<?> trees = (ArrayList<?>) mhTrees.invokeExact(self);
         for (int i = 0; i < trees.size(); ++i) {
-            Object tree = trees.get(i);
-            if ((boolean) mhUseStencil.invokeExact(tree)) return true;
-            if ((boolean) mhTransparent.invokeExact(tree)) return true;
-            if ((float) mhFadeAlpha.invokeExact(tree) < 1.0f) return true;
-            if ((float) mhCutawayAlpha.invokeExact(tree) < 1.0f) return true;
+            treeBox(trees.get(i), box);
+            if (box[0] < r[2] && box[2] > r[0] && box[1] < r[3] && box[3] > r[1]) return true;
         }
         return false;
+    }
+
+    static int seeThroughRects(FBORenderTrees self, float[] hole, int holeN, float[] out) throws Throwable {
+        if (!handlesReady) initHandles();
+        ArrayList<?> trees = (ArrayList<?>) mhTrees.invokeExact(self);
+        int n = 0;
+        for (int i = 0; i < trees.size(); ++i) {
+            Object tree = trees.get(i);
+            boolean transparent = (boolean) mhTransparent.invokeExact(tree);
+            boolean stencil = (boolean) mhUseStencil.invokeExact(tree);
+            boolean fading = (float) mhFadeAlpha.invokeExact(tree) < 1.0f
+                    || (float) mhCutawayAlpha.invokeExact(tree) < 1.0f;
+            if (!transparent && !stencil && !fading) continue;
+            treeBox(tree, box);
+            float bx1 = box[0];
+            float by1 = box[1];
+            float bx2 = box[2];
+            float by2 = box[3];
+            if (transparent || !stencil) {
+                if (n * 4 + 3 >= out.length) return -1;
+                out[n * 4] = bx1;
+                out[n * 4 + 1] = by1;
+                out[n * 4 + 2] = bx2;
+                out[n * 4 + 3] = by2;
+                ++n;
+                continue;
+            }
+            for (int k = 0; k < holeN; ++k) {
+                float x1 = Math.max(bx1, hole[k * 4]);
+                float y1 = Math.max(by1, hole[k * 4 + 1]);
+                float x2 = Math.min(bx2, hole[k * 4 + 2]);
+                float y2 = Math.min(by2, hole[k * 4 + 3]);
+                if (x1 >= x2 || y1 >= y2) continue;
+                if (n * 4 + 3 >= out.length) return -1;
+                out[n * 4] = x1;
+                out[n * 4 + 1] = y1;
+                out[n * 4 + 2] = x2;
+                out[n * 4 + 3] = y2;
+                ++n;
+            }
+        }
+        return n;
     }
 
     private static void init() throws Exception {
@@ -294,15 +521,35 @@ public final class TreeRenderer {
         ShaderProgram.Uniform u;
         u = program.getUniform("uParams", 35666);
         uParams = u == null ? -1 : u.loc;
-        u = program.getUniform("uMode", 35664);
+        u = program.getUniform("uMode", 35666);
         uMode = u == null ? -1 : u.loc;
         u = program.getUniform("stepSize", 35664);
         uStepSize = u == null ? -1 : u.loc;
         u = program.getUniform("outlineColor", 35666);
         uOutlineColor = u == null ? -1 : u.loc;
+        u = program.getUniform("uMask", 35666);
+        uMask = u == null ? -1 : u.loc;
+        u = program.getUniform("uLobe", 35666);
+        uLobe = u == null ? -1 : u.loc;
+        u = program.getUniform("uCrown", 35666);
+        uCrown = u == null ? -1 : u.loc;
+        u = program.getUniform("uLeaf", 35666);
+        uLeaf = u == null ? -1 : u.loc;
+        u = program.getUniform("uQual", 35666);
+        uQual = u == null ? -1 : u.loc;
+        u = program.getUniform("uQual2", 35666);
+        uQual2 = u == null ? -1 : u.loc;
         shader.Start();
         program.setSamplerUnit("DIFFUSE", 0);
         shader.End();
+        if (!glInfoLogged) {
+            glInfoLogged = true;
+            WindSwayMod.trace("GL: " + GL11.glGetString(GL11.GL_RENDERER)
+                    + ", max varying floats " + GL11.glGetInteger(GL20.GL_MAX_VARYING_FLOATS)
+                    + ", max vertex attribs " + GL11.glGetInteger(GL20.GL_MAX_VERTEX_ATTRIBS)
+                    + ", max texture units " + GL11.glGetInteger(GL20.GL_MAX_TEXTURE_IMAGE_UNITS)
+                    + ", timer queries " + (GpuTimer.supported() ? "yes" : "no"));
+        }
     }
 
     private static void fail(Throwable t) {
@@ -323,6 +570,8 @@ public final class TreeRenderer {
         if (FBORenderChunkManager.instance.renderThreadCurrent != null) return false;
         ArrayList<?> trees;
         int vertCount;
+        boolean diag = WindSwayMod.debugLog;
+        long t0 = diag ? System.nanoTime() : 0L;
         try {
             if (shader == null) init();
             trees = (ArrayList<?>) mhTrees.invokeExact(self);
@@ -332,20 +581,28 @@ public final class TreeRenderer {
             fail(t);
             return false;
         }
+        long t1 = diag ? System.nanoTime() : 0L;
         try {
-            draw(vertCount);
+            draw(vertCount, diag);
         } catch (Throwable t) {
             fail(t);
+        }
+        if (diag) {
+            long t2 = System.nanoTime();
+            cpuBuildNs.addAndGet(t1 - t0);
+            cpuDrawNs.addAndGet(t2 - t1);
         }
         return true;
     }
 
-    private static Run newRun(TextureID tex, int first, int group) {
+    private static Run newRun(TextureID tex, int first, int group, float pageW, float pageH) {
         Run r = runPool.isEmpty() ? new Run() : runPool.remove(runPool.size() - 1);
         r.tex = tex;
         r.first = first;
         r.count = 0;
         r.group = group;
+        r.pageW = pageW;
+        r.pageH = pageH;
         runs.add(r);
         return r;
     }
@@ -377,12 +634,15 @@ public final class TreeRenderer {
 
         int floorHeight = 32 * Core.tileScale;
         float dyFloor = (float) floorHeight / 2.0f;
-        double n = TreeSway.w;
+        TreeSway.prepareList();
+        double n = TreeSway.listWind();
         double st = TreeSway.storm * n * n;
         float bendPowNow = (float) (bendPow - bendPowStorm * st);
         double giantRamp = smooth(giantOnset, giantFull, n);
         double leafGate = smooth(0.0, 0.04, n);
-        double branchGate = smooth(0.02, 0.15, n);
+        double branchGate = smooth(branchOnset, branchFull, n);
+        double coniferYStorm = smooth(branchFull, 1.0, n);
+        double leafBase = leafGustBase + (1.0 - leafGustBase) * Math.min(1.0, leafWindFull * n);
 
         runs.clear();
         int maxBytes = trees.size() * 3 * 4 * STRIDE;
@@ -390,8 +650,9 @@ public final class TreeRenderer {
             int cap = stage.capacity();
             while (cap < maxBytes) cap *= 2;
             stage = BufferUtils.createByteBuffer(cap);
+            stageF = stage.asFloatBuffer();
         }
-        stage.clear();
+        stageF.clear();
         int vertCount = 0;
         Run cur = null;
 
@@ -416,9 +677,11 @@ public final class TreeRenderer {
             if ((boolean) mhOre.invokeExact(tree)) {
                 lean = 0.5f * ((float) mhOreX1.invokeExact(tree) + (float) mhOreX2.invokeExact(tree));
             }
-            int group = useStencil ? (transparent ? GROUP_STENCIL_T : GROUP_STENCIL)
+            boolean video = WindSwayMod.videoMode;
+            int group = video ? GROUP_OPAQUE
+                    : useStencil ? (transparent ? GROUP_STENCIL_T : GROUP_STENCIL)
                     : transparent ? GROUP_TRANSPARENT : GROUP_OPAQUE;
-            if (transparent) {
+            if (transparent && !video) {
                 a = Math.min(cutawayAlpha, fadeAlpha);
             }
 
@@ -464,17 +727,33 @@ public final class TreeRenderer {
             float hCrown = (baseRow - refProfile.crownRow) / contentH;
             float hc = (float) (trunkFactor * (1.0 - trunkStorm * st) * hCrown);
             float hKnee = refProfile.conifer ? 1.0f : (float) Math.min(1.0, hCrown + crownKnee * (1.0 - hCrown));
-            float powTree = bendPowNow;
+            // A broadleaf base without its overlay is the winter tree (unknown
+            // sprites stay leafy).
+            boolean bare = !refProfile.conifer && !refProfile.rigid && !refProfile.leafy && texture2 == null;
+            // The shader bends as a rod where the exponent is set; 0 = broadleaf bow.
+            float powTree = 0.0f;
             if (refProfile.conifer) {
                 hc = Math.max(hc, (float) (coniferStart * (1.0 - trunkStorm * st)));
                 powTree = (float) (coniferBendPow - bendPowStorm * st);
+            } else if (bare) {
+                powTree = (float) (bareBendPow - bendPowStorm * st);
             }
             if (hKnee <= hc + 0.02f) hKnee = hc + 0.02f;
+            float topFactor = refProfile.conifer || bare ? 1.0f : (float) profileTop(hc, hKnee, crownTail);
             int wRef = (texture != null ? texture : texture2).getWidthOrig();
             float sizeRef = wRef == FBORenderChunk.JUMBO_L_WIDTH || wRef == FBORenderChunk.JUMBO_XL_WIDTH
                     || wRef == FBORenderChunk.JUMBO_XXL_WIDTH ? wRef / 128.0f : 1.0f;
-            double sway = mainOn ? TreeSway.lean(tx, ty, sizeRef, h1, h2, h3, h4, h5, h6) : 0.0;
+            double sway = TreeSway.lean(tx, ty, sizeRef, hs);
+            double gLocal = TreeSway.localWind;
+            double lobeEnergy = lobeRate > 0.0
+                    ? 1.0 - Math.exp(-(TreeSway.localEnergyRaw / (lobeRate * lobeRate) + lobeWind * n * gLocal))
+                    : 0.0;
+            if (!mainOn) sway = 0.0;
             if (refProfile.conifer) sway *= coniferLean;
+            else if (bare) sway *= bareLean;
+            double lobeXShare = refProfile.conifer ? coniferLobeX : 1.0;
+            double lobeYShare = refProfile.conifer
+                    ? coniferLobeY * (1.0 - coniferLobeYStorm * coniferYStorm) : branchYFrac;
 
             for (int part = 0; part < 2; ++part) {
                 Texture tex = part == 0 ? texture : texture2;
@@ -511,16 +790,28 @@ public final class TreeRenderer {
                 float leanPx = (float) (sway * sizeF + lean) * 128.0f
                         * (float) Math.pow(contentH / hOrig, heightPow) * giant * jitter;
                 float leafPx = profile.leafy ? (float) ((leafAmp + (leafAmpStorm - leafAmp) * n) * leafGate
+                        * (leafBase + (1.0 - leafBase) * gLocal)
                         * Math.min(1.0, Math.pow(contentH / leafRefH, leafSizePow))) : 0.0f;
                 float branchPx = (float) Math.min(branchMax * sizeF,
-                        (branchFloor + (branchStorm - branchFloor) * n) * sizeF * branchGate + branchFrac * Math.abs(leanPx));
-                float leafRate = 1.0f;
+                        (branchFloor + (branchStorm - branchFloor) * n) * sizeF * branchGate
+                        * (branchGustBase + (1.0 - branchGustBase) * lobeEnergy)
+                        + branchFrac * Math.abs(leanPx));
+                float leafRate = (float) (1.0 - leafRateSpread + 2.0 * leafRateSpread * h5);
                 if (refProfile.conifer) {
-                    leafPx *= (float) coniferLeafAmp;
-                    leafRate = (float) coniferLeafHz;
+                    leafPx *= (float) (coniferLeafAmp + (coniferLeafAmpStorm - coniferLeafAmp) * n);
+                    leafRate *= (float) (coniferLeafHz + (coniferLeafHzStorm - coniferLeafHz) * n);
                     branchPx *= (float) coniferLobeAmp;
+                    float tierMin = (float) (coniferLobeMinPx * Math.min(1.0, contentH / coniferLobeMinRefH)
+                            * branchGate * (branchGustBase + (1.0 - branchGustBase) * lobeEnergy));
+                    if (branchPx < tierMin) branchPx = tierMin;
                 }
+                // rate (0.5..1.5) + 2 * floor(g * 63) in one attribute slot.
+                float leafPacked = (float) (Math.floor(gLocal * 63.0) * 2.0) + leafRate;
                 float branchCell = (float) Math.max(branchCellMin, branchCellFrac * w);
+                if (bare) {
+                    branchPx *= (float) bareLobe;
+                    branchCell *= (float) bareCell;
+                }
                 if (!branchOn) branchPx = 0.0f;
                 if (!leafOn) leafPx = 0.0f;
                 if (profile.rigid) {
@@ -528,10 +819,20 @@ public final class TreeRenderer {
                     leafPx = 0.0f;
                     branchPx = 0.0f;
                 }
-                float pad = Math.abs(leanPx) + leafPx + branchPx + 2.0f;
-                // Vertical offsets can carry the crown top past the quad's
-                // top edge; extend the first segment upward by that reach.
-                float padY = (float) (0.3 * leafPx + branchYFrac * branchPx) + 1.0f;
+                // Fields under lodMinPx screen px are dropped (sprite px / zoom).
+                if (lodMinPx > 0.0) {
+                    float lodPx = (float) (lodMinPx * camera.zoom);
+                    if (branchPx * Math.max(lobeXShare, lobeYShare) < lodPx) branchPx = 0.0f;
+                    if (leafPx < lodPx) leafPx = 0.0f;
+                }
+                // The lean widens one side only; lobes and leaves reach both ways.
+                float reach = leafPx + (float) (branchPx * lobeXShare) + 2.0f;
+                float leanTop = leanPx * topFactor;
+                float padL = reach + Math.max(0.0f, -leanTop);
+                float padR = reach + Math.max(0.0f, leanTop);
+                // Vertical offsets and the tilt can lift the crown past the quad top.
+                float padY = (float) (0.3 * leafPx + lobeYShare * branchPx
+                        + 0.5 * crownTilt * Math.abs(leanPx) * topFactor) + 1.0f;
 
                 float xStart = tex.getXStart();
                 float xEnd = tex.getXEnd();
@@ -540,24 +841,27 @@ public final class TreeRenderer {
                 float texelU = (xEnd - xStart) / w;
                 float texelV = (yEndTex - yStartTex) / h;
                 float dx = unitsX / SQRT2 / 2.0f;
-                float xL = (offX - pad) / wOrig * unitsX / SQRT2 - dx;
-                float xR = (offX + w + pad) / wOrig * unitsX / SQRT2 - dx;
-                float uL = xStart - pad * texelU;
-                float uR = xEnd + pad * texelU;
-                // The measured leaf band holds only the dense rows; the sparse
-                // crown top and fringe are leaves too, so for leafy sprites the
-                // band spans from the shared top down to the trunk stub.
-                float leafTopRow = profile.leafy ? topRow : profile.leafTopRow;
-                float leafBottomRow = profile.leafy ? profile.stubTopRow : profile.leafBottomRow;
-                float vLeafTop = yStartTex + (leafTopRow - offY) * texelV;
-                float vLeafBottom = yStartTex + (leafBottomRow - offY) * texelV;
+                float xL = (offX - padL) / wOrig * unitsX / SQRT2 - dx;
+                float xR = (offX + w + padR) / wOrig * unitsX / SQRT2 - dx;
+                float uL = xStart - padL * texelU;
+                float uR = xEnd + padR * texelU;
+                float pageW = tex.getWidthHW();
+                float pageH = tex.getHeightHW();
+                // Leaf band top..trunk stub; no leaves = empty band, the fragment skips
+                // flutter, mask and shade.
+                float vLeafTop = 2.0f;
+                float vLeafBottom = -1.0f;
+                if (profile.leafy) {
+                    vLeafTop = yStartTex + (topRow - offY) * texelV;
+                    vLeafBottom = yStartTex + (profile.stubTopRow - offY) * texelV;
+                }
                 float leanU = leanPx * texelU;
-                float branchU = branchPx * texelU;
-                float branchV = (float) (branchPx * branchYFrac) * texelV;
+                float branchU = (float) (branchPx * lobeXShare) * texelU;
+                float branchV = (float) (branchPx * lobeYShare) * texelV;
                 float leafU = leafPx * texelU;
                 float leafV = 0.3f * leafPx * texelV;
-                float pixL = -pad + seedX;
-                float pixR = w + pad + seedX;
+                float pixL = -padL + seedX;
+                float pixR = w + padR + seedX;
 
                 // Vanilla segments: base sprite in two pieces split above the
                 // floor strip (the lower piece sits nearer, floorHackTop to
@@ -593,21 +897,22 @@ public final class TreeRenderer {
                     float pixB = (bottom - topRow) + seedY;
 
                     if (cur == null || cur.tex != texId || cur.group != group) {
-                        cur = newRun(texId, vertCount, group);
+                        cur = newRun(texId, vertCount, group, pageW, pageH);
                     }
-                    ByteBuffer o = stage;
-                    putVertex(o, xL, yT, wX, wY, wZ, depthT, r, g, b, a, uL, vQuad0, hTop, branchCell,
+                    float[] o = quad;
+                    putVertex(o, 0, xL, yT, wX, wY, wZ, depthT, r, g, b, a, uL, vQuad0, hTop, branchCell,
                             pixL, pixT, texelU, texelV, xStart, xEnd, yStartTex, yEndTex,
-                            leanU, hc, powTree, branchU, leafU, leafV, vLeafTop, vLeafBottom, fadeAlpha, hKnee, branchV, leafRate);
-                    putVertex(o, xR, yT, wX, wY, wZ, depthT, r, g, b, a, uR, vQuad0, hTop, branchCell,
+                            leanU, hc, powTree, branchU, leafU, leafV, vLeafTop, vLeafBottom, fadeAlpha, hKnee, branchV, leafPacked);
+                    putVertex(o, FLOATS, xR, yT, wX, wY, wZ, depthT, r, g, b, a, uR, vQuad0, hTop, branchCell,
                             pixR, pixT, texelU, texelV, xStart, xEnd, yStartTex, yEndTex,
-                            leanU, hc, powTree, branchU, leafU, leafV, vLeafTop, vLeafBottom, fadeAlpha, hKnee, branchV, leafRate);
-                    putVertex(o, xR, yB, wX, wY, wZ, depthB, r, g, b, a, uR, vSeg1, hBottom, branchCell,
+                            leanU, hc, powTree, branchU, leafU, leafV, vLeafTop, vLeafBottom, fadeAlpha, hKnee, branchV, leafPacked);
+                    putVertex(o, 2 * FLOATS, xR, yB, wX, wY, wZ, depthB, r, g, b, a, uR, vSeg1, hBottom, branchCell,
                             pixR, pixB, texelU, texelV, xStart, xEnd, yStartTex, yEndTex,
-                            leanU, hc, powTree, branchU, leafU, leafV, vLeafTop, vLeafBottom, fadeAlpha, hKnee, branchV, leafRate);
-                    putVertex(o, xL, yB, wX, wY, wZ, depthB, r, g, b, a, uL, vSeg1, hBottom, branchCell,
+                            leanU, hc, powTree, branchU, leafU, leafV, vLeafTop, vLeafBottom, fadeAlpha, hKnee, branchV, leafPacked);
+                    putVertex(o, 3 * FLOATS, xL, yB, wX, wY, wZ, depthB, r, g, b, a, uL, vSeg1, hBottom, branchCell,
                             pixL, pixB, texelU, texelV, xStart, xEnd, yStartTex, yEndTex,
-                            leanU, hc, powTree, branchU, leafU, leafV, vLeafTop, vLeafBottom, fadeAlpha, hKnee, branchV, leafRate);
+                            leanU, hc, powTree, branchU, leafU, leafV, vLeafTop, vLeafBottom, fadeAlpha, hKnee, branchV, leafPacked);
+                    stageF.put(o);
                     cur.count += 4;
                     vertCount += 4;
                 }
@@ -619,7 +924,7 @@ public final class TreeRenderer {
         return vertCount;
     }
 
-    private static void putVertex(ByteBuffer o, float lx, float ly, float wX, float wY, float wZ, float depth,
+    private static void putVertex(float[] o, int i, float lx, float ly, float wX, float wY, float wZ, float depth,
                                   float r, float g, float b, float a, float u, float v, float hf, float cell,
                                   float px, float py, float texelU, float texelV,
                                   float rx, float ry, float rz, float rw,
@@ -627,28 +932,50 @@ public final class TreeRenderer {
                                   float leafU, float leafV, float bandTop, float bandBottom, float fade,
                                   float knee, float branchV, float leafRate) {
         float y = ly * ISO_Y;
-        o.putFloat(b00 * lx + b10 * y + b30 + wX);
-        o.putFloat(b01 * lx + b11 * y + b31 + wY);
-        o.putFloat(b02 * lx + b12 * y + b32 + wZ);
-        o.putFloat(depth);
-        o.putFloat(r).putFloat(g).putFloat(b).putFloat(a);
-        o.putFloat(u).putFloat(v).putFloat(hf).putFloat(cell);
-        o.putFloat(px).putFloat(py).putFloat(texelU).putFloat(texelV);
-        o.putFloat(rx).putFloat(ry).putFloat(rz).putFloat(rw);
-        o.putFloat(leanU).putFloat(hc).putFloat(pow).putFloat(branchU);
-        o.putFloat(leafU).putFloat(leafV).putFloat(bandTop).putFloat(bandBottom);
-        o.putFloat(fade).putFloat(knee).putFloat(branchV).putFloat(leafRate);
+        o[i] = b00 * lx + b10 * y + b30 + wX;
+        o[i + 1] = b01 * lx + b11 * y + b31 + wY;
+        o[i + 2] = b02 * lx + b12 * y + b32 + wZ;
+        o[i + 3] = depth;
+        o[i + 4] = r;
+        o[i + 5] = g;
+        o[i + 6] = b;
+        o[i + 7] = a;
+        o[i + 8] = u;
+        o[i + 9] = v;
+        o[i + 10] = hf;
+        o[i + 11] = cell;
+        o[i + 12] = px;
+        o[i + 13] = py;
+        o[i + 14] = texelU;
+        o[i + 15] = texelV;
+        o[i + 16] = rx;
+        o[i + 17] = ry;
+        o[i + 18] = rz;
+        o[i + 19] = rw;
+        o[i + 20] = leanU;
+        o[i + 21] = hc;
+        o[i + 22] = pow;
+        o[i + 23] = branchU;
+        o[i + 24] = leafU;
+        o[i + 25] = leafV;
+        o[i + 26] = bandTop;
+        o[i + 27] = bandBottom;
+        o[i + 28] = fade;
+        o[i + 29] = knee;
+        o[i + 30] = branchV;
+        o[i + 31] = leafRate;
     }
 
     // GL phase. Mirrors renderTree's raw state calls; the tracked state is
     // restored at the end exactly like vanilla's render().
-    private static void draw(int vertCount) {
+    private static void draw(int vertCount, boolean diag) {
         if (vertCount == 0) {
             releaseRuns();
             return;
         }
-        stage.flip();
         int bytes = vertCount * STRIDE;
+        stage.position(0);
+        stage.limit(bytes);
 
         Matrix4f p = Core.getInstance().projectionMatrixStack.alloc();
         p.set(proj);
@@ -656,6 +983,7 @@ public final class TreeRenderer {
         Matrix4f m = Core.getInstance().modelViewMatrixStack.alloc();
         m.set(mvCommon);
         Core.getInstance().modelViewMatrixStack.push(m);
+        boolean timed = diag && gpuTimer.begin();
         try {
             boolean glCheck = glProbe.begin();
             GL13.glActiveTexture(GL13.GL_TEXTURE0);
@@ -701,6 +1029,31 @@ public final class TreeRenderer {
             }
             if (uStepSize >= 0) GL20.glUniform2f(uStepSize, STEP_SIZE, STEP_SIZE);
             if (uOutlineColor >= 0) GL20.glUniform4f(uOutlineColor, 0.1f, 0.1f, 0.1f, 0.8f);
+            if (uMask >= 0) {
+                double wNow = Math.min(1.0, leafWindDens * TreeSway.listWind());
+                float floorNow = (float) (leafMaskFloor + (1.0 - leafMaskFloor) * wNow);
+                GL20.glUniform4f(uMask, (float) TreeSway.maskClock, (float) leafMaskStrength,
+                        (float) (1.0 / Math.max(leafMaskCell, 1.0)), floorNow);
+            }
+            if (uLobe >= 0) {
+                GL20.glUniform4f(uLobe, (float) lobeRefCell, (float) lobeRateExp, (float) lobeFreqSpread,
+                        (float) (1.0 / Math.max(coniferTierAspect, 1.0)));
+            }
+            if (uCrown >= 0) {
+                GL20.glUniform4f(uCrown, (float) crownTail, (float) crownShorten, (float) crownTilt,
+                        (float) coniferLobeRamp);
+            }
+            if (uLeaf >= 0) {
+                GL20.glUniform4f(uLeaf, (float) leafShade, (float) leafCellExp, (float) leafGustDens,
+                        (float) leafShadeRate);
+            }
+            if (uQual >= 0) {
+                GL20.glUniform4f(uQual, qualLobes ? 1.0f : 0.0f, qualOctave2 ? 1.0f : 0.0f,
+                        qualLeaves ? 1.0f : 0.0f, qualMask ? 1.0f : 0.0f);
+            }
+            if (uQual2 >= 0) {
+                GL20.glUniform4f(uQual2, qualShade ? 1.0f : 0.0f, 0.0f, 0.0f, 0.0f);
+            }
             setMode(0.0f, 0.0f);
 
             TextureID bound = null;
@@ -750,6 +1103,10 @@ public final class TreeRenderer {
             }
             SpriteRenderer.ringBuffer.restoreVbos = true;
             SpriteRenderer.ringBuffer.restoreBoundTextures = true;
+            if (timed) {
+                gpuTimer.end();
+                timed = false;
+            }
             if (glCheck) {
                 int err = glProbe.end();
                 if (err != GL11.GL_NO_ERROR) {
@@ -757,6 +1114,7 @@ public final class TreeRenderer {
                 }
             }
         } finally {
+            if (timed) gpuTimer.end();
             Core.getInstance().modelViewMatrixStack.pop();
             Core.getInstance().projectionMatrixStack.pop();
             releaseRuns();
@@ -765,16 +1123,15 @@ public final class TreeRenderer {
     }
 
     private static void setMode(float outline, float capAlpha) {
-        if (uMode >= 0) GL20.glUniform2f(uMode, outline, capAlpha);
+        if (uMode >= 0) GL20.glUniform4f(uMode, outline, capAlpha, (float) coniferTierTrunk, (float) coniferTierPow);
     }
 
     private static TextureID drawRuns(int from, int to, int baseVert, TextureID bound) {
         for (int i = from; i < to; ++i) {
             Run run = runs.get(i);
             if (run.tex != bound) {
-                run.tex.bind();
-                GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MIN_FILTER, GL11.GL_NEAREST);
-                GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MAG_FILTER, GL11.GL_NEAREST);
+                bindNearest(run.tex);
+                diagBinds++;
                 bound = run.tex;
             }
             GL11.glDrawArrays(GL11.GL_QUADS, baseVert + run.first, run.count);
@@ -782,6 +1139,40 @@ public final class TreeRenderer {
         }
         return bound;
     }
+
+    public static volatile int diagBinds;
+
+    // Raw bind, NEAREST once per GL texture: TextureID.bind() rewrites four
+    // sampler parameters on a page the previous draw still reads, which
+    // serialises the draws. restoreBoundTextures resets Texture.lastTextureID.
+    static void bindNearest(TextureID tex) {
+        int id = ensureId(tex);
+        GL11.glBindTexture(GL11.GL_TEXTURE_2D, id);
+        nearestOnce(tex, id);
+    }
+
+    // GL id of the page, created through the engine's bind() (lands on the
+    // active unit).
+    static int ensureId(TextureID tex) {
+        int id = tex.getID();
+        if (id == -1) {
+            tex.bind();
+            id = tex.getID();
+        }
+        return id;
+    }
+
+    // NEAREST once per GL id; the texture must be bound on the active unit.
+    static void nearestOnce(TextureID tex, int id) {
+        Integer seen = nearestSet.get(tex);
+        if (seen == null || seen != id) {
+            GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MIN_FILTER, GL11.GL_NEAREST);
+            GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MAG_FILTER, GL11.GL_NEAREST);
+            nearestSet.put(tex, id);
+        }
+    }
+
+    private static final IdentityHashMap<TextureID, Integer> nearestSet = new IdentityHashMap<>(256);
 
     private static void releaseRuns() {
         for (int i = 0; i < runs.size(); ++i) {

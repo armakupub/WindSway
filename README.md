@@ -13,7 +13,7 @@ I built this for immersion: in vanilla the vegetation stands still most of the t
 
 Options → Mods → Wind Sway, no other setup: the mod turns the game's wind effects on by itself and ignores the vanilla "Wind Sprite Effects" option while it runs. Turn the mod off and your vanilla setting applies again.
 
-[![Wind Sway teaser](https://img.youtube.com/vi/4ZO_f_K5ZnY/maxresdefault.jpg)](https://www.youtube.com/watch?v=4ZO_f_K5ZnY)
+[![Wind Sway teaser](https://img.youtube.com/vi/hekASEhRPB8/maxresdefault.jpg)](https://www.youtube.com/watch?v=hekASEhRPB8)
 
 ## Maintenance status
 
@@ -94,7 +94,7 @@ Then `./build.sh` compiles, packages `windsway.jar`, and installs to `%USERPROFI
 
 - **GitHub:** https://github.com/armakupub/WindSway
 - **Steam Workshop:** https://steamcommunity.com/sharedfiles/filedetails/?id=3782670683
-- **Teaser video:** https://www.youtube.com/watch?v=4ZO_f_K5ZnY
+- **Teaser video:** https://www.youtube.com/watch?v=hekASEhRPB8
 
 ## Attribution
 
