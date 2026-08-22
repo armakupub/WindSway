@@ -586,10 +586,14 @@ public class WindSwayGrassDrawer extends TextureDraw.GenericDrawer {
         }
     }
 
+    // A page without a GL texture yet is created through the engine's
+    // bind() on the active unit: switch first, or the new texture lands on
+    // the previous unit behind the cache.
     private static int bindUnit(int unit, TextureID tex, int active) {
-        int id = TreeRenderer.ensureId(tex);
-        if (unitBound[unit] == id) return active;
+        int id = tex.getID();
+        if (id != -1 && unitBound[unit] == id) return active;
         if (active != unit) GL13.glActiveTexture(GL13.GL_TEXTURE0 + unit);
+        if (id == -1) id = TreeRenderer.ensureId(tex);
         GL11.glBindTexture(GL11.GL_TEXTURE_2D, id);
         TreeRenderer.nearestOnce(tex, id);
         unitBound[unit] = id;

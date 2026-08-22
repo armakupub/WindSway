@@ -1152,12 +1152,14 @@ public final class TreeRenderer {
     }
 
     // GL id of the page, created through the engine's bind() (lands on the
-    // active unit).
+    // active unit). A page without data binds the engine's error texture
+    // and keeps id -1.
     static int ensureId(TextureID tex) {
         int id = tex.getID();
         if (id == -1) {
             tex.bind();
             id = tex.getID();
+            if (id == -1) id = Texture.getErrorTexture().getID();
         }
         return id;
     }
