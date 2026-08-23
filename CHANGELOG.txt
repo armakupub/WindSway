@@ -1,6 +1,10 @@
 Wind Sway - Changelog
 =====================
 
+0.3.1 - 2026-08-23
+  - Fixed: grass flickered into pixel noise while walking.
+    Thanks to @Ismællö for the report!
+
 0.3.0 - 2026-08-23
   - Tree animation retuned: gusts travel through the forest, branches move, leaves flutter in patches, evergreens bounce their branch tiers.
   - Bare trees (winter, burned) sway as bare branches, no leaf animation.
