@@ -4,7 +4,11 @@
 // (0 = discard), colour blends premultiplied. Depth writes are off in the
 // translucent pass; gl_FragDepth only feeds the LEQUAL test.
 // Wind flora: the quad is widened, the bend over the height is a sample
-// offset on diffuse and depth map alike.
+// offset on diffuse and depth map alike. The diffuse is filtered here, on
+// texel centres at the base level: the page keeps whatever filter bound it
+// last (NEAREST after a chunk bake, LINEAR with mipmaps after an engine
+// bind), and NEAREST under the fractional bend plus the camera's sub-pixel
+// offset re-rolls every texel choice each frame while walking.
 
 // Page slot pair from the integer part of vFrame.w (diffuse + 8 * depth,
 // above the barrier bits); GLSL 1.20 cannot index samplers.
@@ -63,15 +67,37 @@ vec4 diffuseAt(float s, vec2 uv)
 	{
 		if (s < 2.0)
 		{
-			return s < 1.0 ? texture2D(DIFFUSE0, uv) : texture2D(DIFFUSE1, uv);
+			return s < 1.0 ? texture2D(DIFFUSE0, uv, -1.0) : texture2D(DIFFUSE1, uv, -1.0);
 		}
-		return s < 3.0 ? texture2D(DIFFUSE2, uv) : texture2D(DIFFUSE3, uv);
+		return s < 3.0 ? texture2D(DIFFUSE2, uv, -1.0) : texture2D(DIFFUSE3, uv, -1.0);
 	}
 	if (s < 6.0)
 	{
-		return s < 5.0 ? texture2D(DIFFUSE4, uv) : texture2D(DIFFUSE5, uv);
+		return s < 5.0 ? texture2D(DIFFUSE4, uv, -1.0) : texture2D(DIFFUSE5, uv, -1.0);
 	}
-	return s < 7.0 ? texture2D(DIFFUSE6, uv) : texture2D(DIFFUSE7, uv);
+	return s < 7.0 ? texture2D(DIFFUSE6, uv, -1.0) : texture2D(DIFFUSE7, uv, -1.0);
+}
+
+// Taps outside the content rect read transparent: the page packs the
+// neighbours right next to it.
+vec4 fetch(float s, vec2 uv)
+{
+	if (uv.x < vRect.x || uv.x > vRect.y || uv.y < vRect.z || uv.y > vRect.w)
+	{
+		return vec4(0.0);
+	}
+	return diffuseAt(s, uv);
+}
+
+vec4 sampleDiffuse(float s, vec2 uv)
+{
+	vec2 texel = abs(vTexel.xy);
+	vec2 t = uv / texel - 0.5;
+	vec2 i = floor(t);
+	vec2 f = t - i;
+	vec2 c00 = (i + 0.5) * texel;
+	return mix(mix(fetch(s, c00), fetch(s, c00 + vec2(texel.x, 0.0)), f.x),
+	           mix(fetch(s, c00 + vec2(0.0, texel.y)), fetch(s, c00 + texel), f.x), f.y);
 }
 
 float depthAt(float s, vec2 uv)
@@ -143,9 +169,12 @@ void main()
 		{
 			discard;
 		}
-		uv2 = vUV2 - vec2(dx * vTexel.z, dy * vTexel.w);
+		// Whole texels for the coverage: the NEAREST depth map then snaps
+		// with the camera as one piece, like vanilla, instead of row by row.
+		vec2 dInt = floor(vec2(dx, dy) + 0.5);
+		uv2 = vUV2 - vec2(dInt.x * vTexel.z, dInt.y * vTexel.w);
 	}
-	vec4 c = diffuseAt(diffuseSlot, uv);
+	vec4 c = sampleDiffuse(diffuseSlot, uv);
 	float d = depthAt(depthSlot, uv2);
 	c *= vColor;
 	c.rgb *= vColor.a;

@@ -562,7 +562,8 @@ public class WindSwayGrassDrawer extends TextureDraw.GenericDrawer {
 
     // Raw binds like the RingBuffer's texture1 path: TextureID.bind() turns the
     // engine's NEAREST depth maps bilinear for the session (edges leak through
-    // walls). Unit cache per batch: vanilla rebinds units 0-2 in between.
+    // walls). Diffuse pages keep the engine's filter state, the shader samples
+    // texel centres. Unit cache per batch: vanilla rebinds units 0-2 in between.
     private static void drawRuns(int baseVert) {
         for (int u = 0; u < unitBound.length; ++u) {
             unitBound[u] = 0;
@@ -571,12 +572,12 @@ public class WindSwayGrassDrawer extends TextureDraw.GenericDrawer {
         for (int i = 0; i < runs.size(); ++i) {
             Run r = runs.get(i);
             for (int k = 0; k < r.nDiffuse; ++k) {
-                active = bindUnit(k, r.diffuse[k], active);
+                active = bindUnit(k, r.diffuse[k], active, false);
             }
             for (int k = 0; k < r.nDepth; ++k) {
                 TextureID depth = r.depth[k];
                 active = depth == null ? bindUnitRaw(depthBase + k, DepthAtlas.textureId(), active)
-                        : bindUnit(depthBase + k, depth, active);
+                        : bindUnit(depthBase + k, depth, active, true);
             }
             if (active != 0) {
                 GL13.glActiveTexture(GL13.GL_TEXTURE0);
@@ -589,13 +590,13 @@ public class WindSwayGrassDrawer extends TextureDraw.GenericDrawer {
     // A page without a GL texture yet is created through the engine's
     // bind() on the active unit: switch first, or the new texture lands on
     // the previous unit behind the cache.
-    private static int bindUnit(int unit, TextureID tex, int active) {
+    private static int bindUnit(int unit, TextureID tex, int active, boolean nearest) {
         int id = tex.getID();
         if (id != -1 && unitBound[unit] == id) return active;
         if (active != unit) GL13.glActiveTexture(GL13.GL_TEXTURE0 + unit);
         if (id == -1) id = TreeRenderer.ensureId(tex);
         GL11.glBindTexture(GL11.GL_TEXTURE_2D, id);
-        TreeRenderer.nearestOnce(tex, id);
+        if (nearest) TreeRenderer.nearestOnce(tex, id);
         unitBound[unit] = id;
         diagBinds.incrementAndGet();
         return unit;
