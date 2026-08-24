@@ -1101,8 +1101,6 @@ public final class TreeRenderer {
                     GL20.glDisableVertexAttribArray(k);
                 }
             }
-            SpriteRenderer.ringBuffer.restoreVbos = true;
-            SpriteRenderer.ringBuffer.restoreBoundTextures = true;
             if (timed) {
                 gpuTimer.end();
                 timed = false;
@@ -1119,6 +1117,11 @@ public final class TreeRenderer {
             Core.getInstance().projectionMatrixStack.pop();
             releaseRuns();
             GLStateRenderThread.restore();
+            // The flags are not consumed between two generic drawers; without
+            // the cache invalidation the shadow drawer samples our last page.
+            Texture.lastTextureID = -1;
+            SpriteRenderer.ringBuffer.restoreVbos = true;
+            SpriteRenderer.ringBuffer.restoreBoundTextures = true;
         }
     }
 
@@ -1144,7 +1147,7 @@ public final class TreeRenderer {
 
     // Raw bind, NEAREST once per GL texture: TextureID.bind() rewrites four
     // sampler parameters on a page the previous draw still reads, which
-    // serialises the draws. restoreBoundTextures resets Texture.lastTextureID.
+    // serialises the draws. The bind cache is invalidated after the pass.
     static void bindNearest(TextureID tex) {
         int id = ensureId(tex);
         GL11.glBindTexture(GL11.GL_TEXTURE_2D, id);

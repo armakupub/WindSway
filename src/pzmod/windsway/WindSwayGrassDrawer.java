@@ -534,6 +534,9 @@ public class WindSwayGrassDrawer extends TextureDraw.GenericDrawer {
             // VBORenderer.flush()'s contract with the RingBuffer: without
             // these flags the next geometry run keeps attrib pointers into
             // OUR buffer, usually the very draw that triggered the flush.
+            // The flags are not consumed between two generic drawers; without
+            // the cache invalidation the shadow drawer samples our last page.
+            Texture.lastTextureID = -1;
             SpriteRenderer.ringBuffer.restoreVbos = true;
             SpriteRenderer.ringBuffer.restoreBoundTextures = true;
             if (diag) {
@@ -554,6 +557,7 @@ public class WindSwayGrassDrawer extends TextureDraw.GenericDrawer {
             }
         } catch (Throwable t) {
             if (timed) gpuTimer.end();
+            Texture.lastTextureID = -1;
             SpriteRenderer.ringBuffer.restoreVbos = true;
             SpriteRenderer.ringBuffer.restoreBoundTextures = true;
             fail(t);

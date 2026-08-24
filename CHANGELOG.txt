@@ -1,6 +1,10 @@
 Wind Sway - Changelog
 =====================
 
+0.3.2 - 2026-08-24
+  - Fixed: character and zombie shadows could turn into a sheet of changing game tiles.
+    Thanks to @Ismællö for the report and the screenshot!
+
 0.3.1 - 2026-08-23
   - Fixed: grass flickered into pixel noise while walking.
     Thanks to @Ismællö for the report!
