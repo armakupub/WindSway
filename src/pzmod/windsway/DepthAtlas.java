@@ -190,6 +190,8 @@ final class DepthAtlas {
             // class); a zero depth texel discards.
             ByteBuffer zero = BufferUtils.createByteBuffer(size * size);
             GL11.glTexImage2D(GL11.GL_TEXTURE_2D, 0, GL11.GL_RED, size, size, 0, GL11.GL_RED, GL11.GL_UNSIGNED_BYTE, zero);
+            // The batch may return before it invalidates the bind cache.
+            Texture.lastTextureID = 0;
             GL11.glBindTexture(GL11.GL_TEXTURE_2D, 0);
             if (m == MODE_BLIT) {
                 fboRead = GL30.glGenFramebuffers();
