@@ -4,7 +4,6 @@ import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.IdentityHashMap;
 
-import org.lwjgl.BufferUtils;
 import org.lwjgl.opengl.GL11;
 import org.lwjgl.opengl.GL12;
 import org.lwjgl.opengl.GL30;
@@ -12,15 +11,16 @@ import org.lwjgl.opengl.GL43;
 import org.lwjgl.opengl.GLCapabilities;
 import org.lwjglx.opengl.Display;
 
-import zombie.core.Core;
+import zombie.core.opengl.RenderThread;
 import zombie.core.textures.Texture;
 import zombie.core.textures.TextureID;
 import zombie.iso.IsoCamera;
 
 // One GL texture per tile depth map in the engine (TileDepthTexture), so a
 // grass batch ran out of depth slots after eight quads. Each map seen is
-// copied into this atlas on the GPU, two frames later: the engine's upload
-// is queued on the render thread and an early copy freezes an empty cell.
+// copied into this atlas on the GPU once the engine's upload has run (it
+// sits on the render thread's invoke queue, outside the frame); an early
+// copy freezes an empty cell for the session.
 final class DepthAtlas {
 
     static final int MODE_AUTO = -1;
@@ -36,9 +36,11 @@ final class DepthAtlas {
         int cx;
         int cy;
         int srcId = -1;
-        int frameAssigned;
+        boolean uploaded;
         boolean copied;
+        TextureID key;
         Texture source;
+        int lastUsed;
         // Atlas uv = u0 + tile uv * su.
         float u0;
         float v0;
@@ -59,13 +61,20 @@ final class DepthAtlas {
     private static int fboDraw;
     private static final IdentityHashMap<TextureID, Cell> cells = new IdentityHashMap<>(512);
     private static final ArrayList<Cell> pending = new ArrayList<>();
-    private static int frames;
+    private static Cell[] slots;
+    // Frame clock for the cells' recency (the game-thread counter read here
+    // is off by a frame or two, which is fine for an age).
+    private static int tick;
     private static int lastFrameCount = Integer.MIN_VALUE;
-    private static int lastCheckFrame = -1;
+    // A cell must sit unused this long before it is recycled: a working set
+    // larger than the atlas then overflows onto the depth slots instead of
+    // rotating through the copies every frame.
+    private static final int EVICT_AGE = 30;
 
     static volatile int diagCopies;
     static volatile int diagCells;
     static volatile int diagCapacity;
+    static volatile int diagEvictions;
 
     // One-texel gutter between cells.
     private static int pitchX() {
@@ -84,6 +93,14 @@ final class DepthAtlas {
         return mode != MODE_OFF && texId != 0 && modeWanted != MODE_OFF;
     }
 
+    // Game thread. A copy or init failure parks the atlas; try again per
+    // new world.
+    static void rearm() {
+        if (inited && mode == MODE_OFF && modeWanted != MODE_OFF) {
+            reinit = true;
+        }
+    }
+
     static void beginBatch() {
         if (reinit) {
             reinit = false;
@@ -94,22 +111,12 @@ final class DepthAtlas {
         int fc = IsoCamera.frameState.frameCount;
         if (fc != lastFrameCount) {
             lastFrameCount = fc;
-            ++frames;
-            // A lost GL context (video mode change) leaves a dead id.
-            if (frames - lastCheckFrame >= 120) {
-                lastCheckFrame = frames;
-                if (!GL11.glIsTexture(texId)) {
-                    WindSwayMod.trace("depth atlas texture lost, rebuilding");
-                    destroy();
-                    init();
-                    if (mode == MODE_OFF) return;
-                }
-            }
+            ++tick;
         }
         if (pending.isEmpty()) return;
         for (int i = pending.size() - 1; i >= 0; --i) {
             Cell c = pending.get(i);
-            if (frames - c.frameAssigned < 2) continue;
+            if (!c.uploaded) continue;
             TextureID id = c.source.getTextureId();
             int src = id != null ? id.getID() : -1;
             if (src == -1) continue;
@@ -130,30 +137,59 @@ final class DepthAtlas {
         Cell c = cells.get(id);
         if (c == null) {
             if (depthTex.getWidthHW() != cellW || depthTex.getHeightHW() != cellH) return null;
-            if (used >= cols * rows) return null;
-            c = new Cell();
-            c.cx = used % cols;
-            c.cy = used / cols;
-            ++used;
-            diagCells = used;
+            if (used >= cols * rows) {
+                c = evict();
+                if (c == null) return null;
+            } else {
+                c = new Cell();
+                c.cx = used % cols;
+                c.cy = used / cols;
+                c.u0 = (float) (c.cx * pitchX()) / size;
+                c.v0 = (float) (c.cy * pitchY()) / size;
+                c.su = (float) cellW / size;
+                c.sv = (float) cellH / size;
+                slots[used] = c;
+                ++used;
+                diagCells = used;
+            }
+            c.key = id;
             c.source = depthTex;
-            c.frameAssigned = frames;
-            c.u0 = (float) (c.cx * pitchX()) / size;
-            c.v0 = (float) (c.cy * pitchY()) / size;
-            c.su = (float) cellW / size;
-            c.sv = (float) cellH / size;
+            c.srcId = -1;
+            c.lastUsed = tick;
             cells.put(id, c);
-            pending.add(c);
+            queue(c);
             return null;
         }
+        c.lastUsed = tick;
         if (!c.copied) return null;
         if (c.srcId != id.getID()) {
-            c.copied = false;
-            c.frameAssigned = frames;
-            pending.add(c);
+            queue(c);
             return null;
         }
         return c;
+    }
+
+    // Least recently used copied cell past the age.
+    private static Cell evict() {
+        Cell best = null;
+        for (int i = 0; i < used; ++i) {
+            Cell c = slots[i];
+            if (!c.copied || tick - c.lastUsed < EVICT_AGE) continue;
+            if (best == null || c.lastUsed < best.lastUsed) best = c;
+        }
+        if (best == null) return null;
+        cells.remove(best.key);
+        ++diagEvictions;
+        return best;
+    }
+
+    // The engine queued the map's upload from the game thread before this
+    // frame was handed over; the marker lands behind it in the same FIFO.
+    private static void queue(Cell c) {
+        c.copied = false;
+        c.uploaded = false;
+        pending.add(c);
+        RenderThread.queueInvokeOnRenderContext(() -> c.uploaded = true);
     }
 
     private static void init() {
@@ -176,8 +212,9 @@ final class DepthAtlas {
             }
             int maxSize = GL11.glGetInteger(GL11.GL_MAX_TEXTURE_SIZE);
             size = Math.min(Math.max(1024, sizeWanted), maxSize);
-            cellW = 64 * Core.tileScale;
-            cellH = 128 * Core.tileScale;
+            // Every TilesetDepthTexture is built 2x, whatever tileScale says.
+            cellW = 128;
+            cellH = 256;
             cols = size / pitchX();
             rows = size / pitchY();
             texId = GL11.glGenTextures();
@@ -187,9 +224,8 @@ final class DepthAtlas {
             GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_WRAP_S, GL12.GL_CLAMP_TO_EDGE);
             GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_WRAP_T, GL12.GL_CLAMP_TO_EDGE);
             // Unsized GL_RED like the engine's maps (copy_image needs one format
-            // class); a zero depth texel discards.
-            ByteBuffer zero = BufferUtils.createByteBuffer(size * size);
-            GL11.glTexImage2D(GL11.GL_TEXTURE_2D, 0, GL11.GL_RED, size, size, 0, GL11.GL_RED, GL11.GL_UNSIGNED_BYTE, zero);
+            // class). No data: a cell is only sampled once its copy overwrote it.
+            GL11.glTexImage2D(GL11.GL_TEXTURE_2D, 0, GL11.GL_RED, size, size, 0, GL11.GL_RED, GL11.GL_UNSIGNED_BYTE, (ByteBuffer) null);
             // The batch may return before it invalidates the bind cache.
             Texture.lastTextureID = 0;
             GL11.glBindTexture(GL11.GL_TEXTURE_2D, 0);
@@ -198,6 +234,7 @@ final class DepthAtlas {
                 fboDraw = GL30.glGenFramebuffers();
             }
             mode = m;
+            slots = new Cell[cols * rows];
             diagCapacity = cols * rows;
             diagCells = 0;
             WindSwayMod.trace("depth atlas " + size + "x" + size + ", " + cols * rows + " cells of " + cellW + "x" + cellH
@@ -225,6 +262,7 @@ final class DepthAtlas {
         }
         cells.clear();
         pending.clear();
+        slots = null;
         used = 0;
         inited = false;
         mode = MODE_OFF;

@@ -94,7 +94,11 @@ void main (void)
 		vec2 n1 = noise1((s - adv) / uTurb.x, 11.0);
 		vec2 n2 = noise1((s - adv) / uTurb.y + 7.7, 23.0);
 		float rate = uTurb.z * (0.7 + 0.6 * hRate);
-		vec2 n3 = noise1(uClock.x * rate + hPhase * 4096.0, 37.0);
+		// Decorrelate through the salt, not the coordinate: a 4096 offset
+		// costs twelve mantissa bits in float32 (the tree path does this in
+		// double). noise1 hashes floor(x) + salt, so this is exact.
+		float off = hPhase * 4096.0;
+		vec2 n3 = noise1(uClock.x * rate + fract(off), 37.0 + floor(off));
 		float v = uMix.x * n1.x + uMix.y * n2.x + uMix.z * n3.x;
 		float d = -uMix.x * n1.y * dirSign * speed / uTurb.x
 		        - uMix.y * n2.y * dirSign * speed / uTurb.y
@@ -115,6 +119,11 @@ void main (void)
 		float swing = uRing.x * energy * sens * (rest + (1.0 - rest) * e);
 		float period = aWind.w * (1.0 - uRing2.w + 2.0 * uRing2.w * hPeriod);
 		float ph = uClock.y / period + hRing;
+		// The fragment takes sin of ph and of ph / 0.55; 11 is a period of
+		// both, so the wrap is exact and the sine argument stays small
+		// (past ~48k rad the SFU sine loses accuracy, reached after two
+		// hours of play).
+		ph = mod(ph, 11.0);
 		// vWind: x amplitude (px, signed), y lean share, z swing share, w phase.
 		vWind = vec4(uWind.z * aWind.z * uWind.y, uClock.w * w + e, swing, ph);
 	}

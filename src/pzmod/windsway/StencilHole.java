@@ -29,7 +29,8 @@ final class StencilHole {
     private static Inset[] insets;
     private static boolean loaded;
 
-    private static void load() {
+    static void load() {
+        if (loaded) return;
         loaded = true;
         Inset[] r = new Inset[FILES.length];
         for (int i = 0; i < FILES.length; ++i) {

@@ -113,7 +113,10 @@ vec4 fetch(vec2 uv)
 	{
 		return vec4(0.0);
 	}
-	return texture2D(DIFFUSE, uv);
+	// Base level pinned: the page keeps whatever filter the engine bound it
+	// with last (six of the Tiles2x tree pages are shared with sprites drawn
+	// through the ring buffer), and a mip of a packed page bleeds neighbours.
+	return texture2D(DIFFUSE, uv, -1.0);
 }
 
 vec4 sampleTree(vec2 uv)
@@ -129,11 +132,11 @@ vec4 sampleTree(vec2 uv)
 
 vec4 outline(vec2 uv)
 {
-	float alpha = 4.0 * texture2D(DIFFUSE, uv).a;
-	alpha -= texture2D(DIFFUSE, uv + vec2(stepSize.x, 0.0)).a;
-	alpha -= texture2D(DIFFUSE, uv + vec2(-stepSize.x, 0.0)).a;
-	alpha -= texture2D(DIFFUSE, uv + vec2(0.0, stepSize.y)).a;
-	alpha -= texture2D(DIFFUSE, uv + vec2(0.0, -stepSize.y)).a;
+	float alpha = 4.0 * texture2D(DIFFUSE, uv, -1.0).a;
+	alpha -= texture2D(DIFFUSE, uv + vec2(stepSize.x, 0.0), -1.0).a;
+	alpha -= texture2D(DIFFUSE, uv + vec2(-stepSize.x, 0.0), -1.0).a;
+	alpha -= texture2D(DIFFUSE, uv + vec2(0.0, stepSize.y), -1.0).a;
+	alpha -= texture2D(DIFFUSE, uv + vec2(0.0, -stepSize.y), -1.0).a;
 	alpha = clamp(alpha * outlineColor.a, 0.0, 1.0);
 	return vec4(outlineColor.rgb * alpha, alpha);
 }

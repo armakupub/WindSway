@@ -317,8 +317,10 @@ public class WindSwayGrassDrawer extends TextureDraw.GenericDrawer {
             if (debugFail) {
                 throw new IllegalStateException("forced by setDebugGrassFail");
             }
+            // Bakes are queued before any capture of the frame, so this
+            // cannot happen from our own path; a foreign bake skips the
+            // batch, it does not park the mod for the session.
             if (FBORenderChunkManager.instance.renderThreadCurrent != null) {
-                fail("render thread inside a chunk bake");
                 return;
             }
             if (shader == null) {
@@ -336,7 +338,12 @@ public class WindSwayGrassDrawer extends TextureDraw.GenericDrawer {
                 depthBase = maxSlots;
             }
             state = READY;
-            if (this.quads == null || this.quads.isEmpty()) return;
+            if (this.quads == null) {
+                // Probe: create the atlas here too.
+                DepthAtlas.beginBatch();
+                return;
+            }
+            if (this.quads.isEmpty()) return;
 
             int maxBytes = this.quads.size() * 4 * STRIDE;
             if (stage.capacity() < maxBytes) {

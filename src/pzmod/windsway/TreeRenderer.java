@@ -28,6 +28,7 @@ import zombie.core.skinnedmodel.shader.Shader;
 import zombie.core.skinnedmodel.shader.ShaderManager;
 import zombie.core.sprite.SpriteRenderState;
 import zombie.core.textures.Texture;
+import zombie.core.textures.TextureDraw;
 import zombie.core.textures.TextureID;
 import zombie.iso.IsoDepthHelper;
 import zombie.iso.PlayerCamera;
@@ -204,27 +205,64 @@ public final class TreeRenderer {
         return WindSwayMod.enabled && warp && ok;
     }
 
-    private static MethodHandle mhTrees;
-    private static MethodHandle mhPlayerX;
-    private static MethodHandle mhPlayerY;
-    private static MethodHandle mhPlayerZ;
-    private static MethodHandle mhTexture;
-    private static MethodHandle mhTexture2;
-    private static MethodHandle mhX;
-    private static MethodHandle mhY;
-    private static MethodHandle mhZ;
-    private static MethodHandle mhR;
-    private static MethodHandle mhG;
-    private static MethodHandle mhB;
-    private static MethodHandle mhA;
-    private static MethodHandle mhOre;
-    private static MethodHandle mhOreX1;
-    private static MethodHandle mhOreX2;
-    private static MethodHandle mhUseStencil;
-    private static MethodHandle mhFadeAlpha;
-    private static MethodHandle mhTransparent;
-    private static MethodHandle mhCutawayAlpha;
-    private static MethodHandle mhDepthOffset;
+    // Constant handles: C2 folds invokeExact on a static final into the
+    // field read; a plain static goes through the LambdaForm invoker.
+    // Tree is package-private, so its getters take Object; the list holder
+    // is typed, invokeExact needs the receiver type to match the call site.
+    private static final class H {
+        static final MethodHandle trees;
+        static final MethodHandle playerX;
+        static final MethodHandle playerY;
+        static final MethodHandle playerZ;
+        static final MethodHandle texture;
+        static final MethodHandle texture2;
+        static final MethodHandle x;
+        static final MethodHandle y;
+        static final MethodHandle z;
+        static final MethodHandle r;
+        static final MethodHandle g;
+        static final MethodHandle b;
+        static final MethodHandle a;
+        static final MethodHandle ore;
+        static final MethodHandle oreX1;
+        static final MethodHandle oreX2;
+        static final MethodHandle useStencil;
+        static final MethodHandle fadeAlpha;
+        static final MethodHandle transparent;
+        static final MethodHandle cutawayAlpha;
+        static final MethodHandle depthOffset;
+
+        static {
+            try {
+                MethodHandles.Lookup lookup = MethodHandles.lookup();
+                Class<?> treeClass = Class.forName("zombie.iso.fboRenderChunk.FBORenderTrees$Tree", true,
+                        FBORenderTrees.class.getClassLoader());
+                trees = getter(lookup, FBORenderTrees.class, "trees", ArrayList.class, FBORenderTrees.class);
+                playerX = getter(lookup, FBORenderTrees.class, "playerX", float.class, FBORenderTrees.class);
+                playerY = getter(lookup, FBORenderTrees.class, "playerY", float.class, FBORenderTrees.class);
+                playerZ = getter(lookup, FBORenderTrees.class, "playerZ", float.class, FBORenderTrees.class);
+                texture = getter(lookup, treeClass, "texture", Texture.class);
+                texture2 = getter(lookup, treeClass, "texture2", Texture.class);
+                x = getter(lookup, treeClass, "x", float.class);
+                y = getter(lookup, treeClass, "y", float.class);
+                z = getter(lookup, treeClass, "z", float.class);
+                r = getter(lookup, treeClass, "r", float.class);
+                g = getter(lookup, treeClass, "g", float.class);
+                b = getter(lookup, treeClass, "b", float.class);
+                a = getter(lookup, treeClass, "a", float.class);
+                ore = getter(lookup, treeClass, "objectRenderEffects", boolean.class);
+                oreX1 = getter(lookup, treeClass, "oreX1", float.class);
+                oreX2 = getter(lookup, treeClass, "oreX2", float.class);
+                useStencil = getter(lookup, treeClass, "useStencil", boolean.class);
+                fadeAlpha = getter(lookup, treeClass, "fadeAlpha", float.class);
+                transparent = getter(lookup, treeClass, "transparent", boolean.class);
+                cutawayAlpha = getter(lookup, treeClass, "cutawayAlpha", float.class);
+                depthOffset = getter(lookup, treeClass, "depthOffset", int.class);
+            } catch (Exception e) {
+                throw new ExceptionInInitializerError(e);
+            }
+        }
+    }
 
     private static int uParams = -1;
     private static int uMode = -1;
@@ -317,8 +355,6 @@ public final class TreeRenderer {
         return dc > 0.0 ? profileRaw(1.0, hc, knee, tail) / dc : 1.0;
     }
 
-    // Tree is package-private, so its getters take Object; the list holder
-    // is typed, invokeExact needs the receiver type to match the call site.
     private static MethodHandle getter(MethodHandles.Lookup lookup, Class<?> cls, String name, Class<?> as) throws Exception {
         return getter(lookup, cls, name, as, Object.class);
     }
@@ -329,55 +365,47 @@ public final class TreeRenderer {
         return lookup.unreflectGetter(f).asType(MethodType.methodType(as, receiver));
     }
 
-    private static volatile boolean handlesReady;
-
     // Reflection only, any thread; the GL part of init() stays on the
-    // render thread.
-    private static synchronized void initHandles() throws Exception {
-        if (handlesReady) return;
-        MethodHandles.Lookup lookup = MethodHandles.lookup();
-        Class<?> treeClass = Class.forName("zombie.iso.fboRenderChunk.FBORenderTrees$Tree", true,
-                FBORenderTrees.class.getClassLoader());
-        MethodHandle trees = getter(lookup, FBORenderTrees.class, "trees", ArrayList.class, FBORenderTrees.class);
-        mhPlayerX = getter(lookup, FBORenderTrees.class, "playerX", float.class, FBORenderTrees.class);
-        mhPlayerY = getter(lookup, FBORenderTrees.class, "playerY", float.class, FBORenderTrees.class);
-        mhPlayerZ = getter(lookup, FBORenderTrees.class, "playerZ", float.class, FBORenderTrees.class);
-        mhTexture = getter(lookup, treeClass, "texture", Texture.class);
-        mhTexture2 = getter(lookup, treeClass, "texture2", Texture.class);
-        mhX = getter(lookup, treeClass, "x", float.class);
-        mhY = getter(lookup, treeClass, "y", float.class);
-        mhZ = getter(lookup, treeClass, "z", float.class);
-        mhR = getter(lookup, treeClass, "r", float.class);
-        mhG = getter(lookup, treeClass, "g", float.class);
-        mhB = getter(lookup, treeClass, "b", float.class);
-        mhA = getter(lookup, treeClass, "a", float.class);
-        mhOre = getter(lookup, treeClass, "objectRenderEffects", boolean.class);
-        mhOreX1 = getter(lookup, treeClass, "oreX1", float.class);
-        mhOreX2 = getter(lookup, treeClass, "oreX2", float.class);
-        mhUseStencil = getter(lookup, treeClass, "useStencil", boolean.class);
-        mhFadeAlpha = getter(lookup, treeClass, "fadeAlpha", float.class);
-        mhTransparent = getter(lookup, treeClass, "transparent", boolean.class);
-        mhCutawayAlpha = getter(lookup, treeClass, "cutawayAlpha", float.class);
-        mhDepthOffset = getter(lookup, treeClass, "depthOffset", int.class);
-        mhTrees = trees;
-        handlesReady = true;
+    // render thread. A failed holder init resurfaces as NoClassDefFoundError
+    // on every later touch, which the callers' latches catch.
+    static void initHandles() {
+        MethodHandle touch = H.trees;
+    }
+
+    // Render thread, queued at world start: shader compile, handle and
+    // profile-table loads land in the loading screen instead of the first
+    // tree list's frame.
+    static void warm() {
+        if (!ok || shader != null) return;
+        try {
+            init();
+            TreeProfile.warm();
+        } catch (Throwable t) {
+            fail(t);
+        }
+    }
+
+    static final class WarmDrawer extends TextureDraw.GenericDrawer {
+        @Override
+        public void render() {
+            warm();
+        }
     }
 
     static ArrayList<?> trees(FBORenderTrees self) throws Throwable {
-        if (!handlesReady) initHandles();
-        return (ArrayList<?>) mhTrees.invokeExact(self);
+        return (ArrayList<?>) H.trees.invokeExact(self);
     }
 
     static float treeX(Object tree) throws Throwable {
-        return (float) mhX.invokeExact(tree);
+        return (float) H.x.invokeExact(tree);
     }
 
     static float treeY(Object tree) throws Throwable {
-        return (float) mhY.invokeExact(tree);
+        return (float) H.y.invokeExact(tree);
     }
 
     static float treeZ(Object tree) throws Throwable {
-        return (float) mhZ.invokeExact(tree);
+        return (float) H.z.invokeExact(tree);
     }
 
     // Game thread, before a tree list is queued: true when a tree of the
@@ -396,19 +424,18 @@ public final class TreeRenderer {
     // Bit set of the see-through causes present in the list.
     static int seeThroughKind(FBORenderTrees self) throws Throwable {
         if (WindSwayMod.videoMode) return 0;
-        if (!handlesReady) initHandles();
-        ArrayList<?> trees = (ArrayList<?>) mhTrees.invokeExact(self);
+        ArrayList<?> trees = (ArrayList<?>) H.trees.invokeExact(self);
         int kind = 0;
         for (int i = 0; i < trees.size(); ++i) {
             Object tree = trees.get(i);
-            boolean transparent = (boolean) mhTransparent.invokeExact(tree);
+            boolean transparent = (boolean) H.transparent.invokeExact(tree);
             if (transparent) {
                 kind |= SEE_TRANSPARENT;
-            } else if ((boolean) mhUseStencil.invokeExact(tree)) {
+            } else if ((boolean) H.useStencil.invokeExact(tree)) {
                 kind |= SEE_STENCIL;
-            } else if ((float) mhFadeAlpha.invokeExact(tree) < 1.0f) {
+            } else if ((float) H.fadeAlpha.invokeExact(tree) < 1.0f) {
                 kind |= SEE_FADE;
-            } else if ((float) mhCutawayAlpha.invokeExact(tree) < 1.0f) {
+            } else if ((float) H.cutawayAlpha.invokeExact(tree) < 1.0f) {
                 kind |= SEE_CUTAWAY;
             }
         }
@@ -426,9 +453,9 @@ public final class TreeRenderer {
     private static final float[] box = new float[4];
 
     // Game thread. Conservative screen box of a tree, offscreen px.
-    private static void treeBox(Object tree, float[] out) throws Throwable {
-        Texture texture = (Texture) mhTexture.invokeExact(tree);
-        Texture texture2 = (Texture) mhTexture2.invokeExact(tree);
+    static void treeBox(Object tree, float[] out) throws Throwable {
+        Texture texture = (Texture) H.texture.invokeExact(tree);
+        Texture texture2 = (Texture) H.texture2.invokeExact(tree);
         float w = 0.0f;
         float h = 0.0f;
         if (texture != null) {
@@ -439,9 +466,9 @@ public final class TreeRenderer {
             w = Math.max(w, texture2.getWidthOrig());
             h = Math.max(h, texture2.getHeightOrig());
         }
-        float tx = (float) mhX.invokeExact(tree);
-        float ty = (float) mhY.invokeExact(tree);
-        float tz = (float) mhZ.invokeExact(tree);
+        float tx = (float) H.x.invokeExact(tree);
+        float ty = (float) H.y.invokeExact(tree);
+        float tz = (float) H.z.invokeExact(tree);
         float ax = IsoUtils.XToScreen(tx, ty, tz, 0) - IsoCamera.frameState.offX;
         float ay = IsoUtils.YToScreen(tx, ty, tz, 0) - IsoCamera.frameState.offY;
         out[0] = ax - 0.5f * w - BOX_SLACK_X;
@@ -450,27 +477,15 @@ public final class TreeRenderer {
         out[3] = ay + BOX_SLACK_Y;
     }
 
-    // Game thread. True when a tree of the list can touch the rect.
-    static boolean anyTreeHits(FBORenderTrees self, float[] r) throws Throwable {
-        if (!handlesReady) initHandles();
-        ArrayList<?> trees = (ArrayList<?>) mhTrees.invokeExact(self);
-        for (int i = 0; i < trees.size(); ++i) {
-            treeBox(trees.get(i), box);
-            if (box[0] < r[2] && box[2] > r[0] && box[1] < r[3] && box[3] > r[1]) return true;
-        }
-        return false;
-    }
-
     static int seeThroughRects(FBORenderTrees self, float[] hole, int holeN, float[] out) throws Throwable {
-        if (!handlesReady) initHandles();
-        ArrayList<?> trees = (ArrayList<?>) mhTrees.invokeExact(self);
+        ArrayList<?> trees = (ArrayList<?>) H.trees.invokeExact(self);
         int n = 0;
         for (int i = 0; i < trees.size(); ++i) {
             Object tree = trees.get(i);
-            boolean transparent = (boolean) mhTransparent.invokeExact(tree);
-            boolean stencil = (boolean) mhUseStencil.invokeExact(tree);
-            boolean fading = (float) mhFadeAlpha.invokeExact(tree) < 1.0f
-                    || (float) mhCutawayAlpha.invokeExact(tree) < 1.0f;
+            boolean transparent = (boolean) H.transparent.invokeExact(tree);
+            boolean stencil = (boolean) H.useStencil.invokeExact(tree);
+            boolean fading = (float) H.fadeAlpha.invokeExact(tree) < 1.0f
+                    || (float) H.cutawayAlpha.invokeExact(tree) < 1.0f;
             if (!transparent && !stencil && !fading) continue;
             treeBox(tree, box);
             float bx1 = box[0];
@@ -563,6 +578,11 @@ public final class TreeRenderer {
         System.out.println("[WindSway] tree renderer disabled, trees follow vanilla: " + why);
     }
 
+    // Any thread; a sibling latch takes the batch renderer down with it.
+    static void disable(String why) {
+        if (ok) fail(why);
+    }
+
     // Render thread, in place of FBORenderTrees.render. Returns true when
     // the list was drawn (or is empty) and vanilla must skip.
     public static boolean render(FBORenderTrees self) {
@@ -574,7 +594,7 @@ public final class TreeRenderer {
         long t0 = diag ? System.nanoTime() : 0L;
         try {
             if (shader == null) init();
-            trees = (ArrayList<?>) mhTrees.invokeExact(self);
+            trees = (ArrayList<?>) H.trees.invokeExact(self);
             if (trees.isEmpty()) return true;
             vertCount = build(self, trees);
         } catch (Throwable t) {
@@ -611,9 +631,9 @@ public final class TreeRenderer {
     private static int build(FBORenderTrees self, ArrayList<?> trees) throws Throwable {
         SpriteRenderState renderState = SpriteRenderer.instance.getRenderingState();
         PlayerCamera camera = renderState.playerCamera[renderState.playerIndex];
-        float playerX = (float) mhPlayerX.invokeExact(self);
-        float playerY = (float) mhPlayerY.invokeExact(self);
-        float playerZ = (float) mhPlayerZ.invokeExact(self);
+        float playerX = (float) H.playerX.invokeExact(self);
+        float playerY = (float) H.playerY.invokeExact(self);
+        float playerZ = (float) H.playerZ.invokeExact(self);
         float rcx = camera.rightClickX;
         float rcy = camera.rightClickY;
         float tox = camera.getTOffX();
@@ -658,24 +678,24 @@ public final class TreeRenderer {
 
         for (int i = 0; i < trees.size(); ++i) {
             Object tree = trees.get(i);
-            Texture texture = (Texture) mhTexture.invokeExact(tree);
-            Texture texture2 = (Texture) mhTexture2.invokeExact(tree);
+            Texture texture = (Texture) H.texture.invokeExact(tree);
+            Texture texture2 = (Texture) H.texture2.invokeExact(tree);
             if (texture == null && texture2 == null) continue;
-            float tx = (float) mhX.invokeExact(tree);
-            float ty = (float) mhY.invokeExact(tree);
-            float tz = (float) mhZ.invokeExact(tree);
-            float r = (float) mhR.invokeExact(tree);
-            float g = (float) mhG.invokeExact(tree);
-            float b = (float) mhB.invokeExact(tree);
-            float a = (float) mhA.invokeExact(tree);
-            boolean useStencil = (boolean) mhUseStencil.invokeExact(tree);
-            boolean transparent = (boolean) mhTransparent.invokeExact(tree);
-            float fadeAlpha = (float) mhFadeAlpha.invokeExact(tree);
-            float cutawayAlpha = (float) mhCutawayAlpha.invokeExact(tree);
-            int depthOffset = (int) mhDepthOffset.invokeExact(tree);
+            float tx = (float) H.x.invokeExact(tree);
+            float ty = (float) H.y.invokeExact(tree);
+            float tz = (float) H.z.invokeExact(tree);
+            float r = (float) H.r.invokeExact(tree);
+            float g = (float) H.g.invokeExact(tree);
+            float b = (float) H.b.invokeExact(tree);
+            float a = (float) H.a.invokeExact(tree);
+            boolean useStencil = (boolean) H.useStencil.invokeExact(tree);
+            boolean transparent = (boolean) H.transparent.invokeExact(tree);
+            float fadeAlpha = (float) H.fadeAlpha.invokeExact(tree);
+            float cutawayAlpha = (float) H.cutawayAlpha.invokeExact(tree);
+            int depthOffset = (int) H.depthOffset.invokeExact(tree);
             float lean = 0.0f;
-            if ((boolean) mhOre.invokeExact(tree)) {
-                lean = 0.5f * ((float) mhOreX1.invokeExact(tree) + (float) mhOreX2.invokeExact(tree));
+            if ((boolean) H.ore.invokeExact(tree)) {
+                lean = 0.5f * ((float) H.oreX1.invokeExact(tree) + (float) H.oreX2.invokeExact(tree));
             }
             boolean video = WindSwayMod.videoMode;
             int group = video ? GROUP_OPAQUE

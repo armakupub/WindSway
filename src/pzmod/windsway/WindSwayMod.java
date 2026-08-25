@@ -24,6 +24,7 @@ import zombie.core.textures.ColorInfo;
 import zombie.core.textures.Texture;
 import zombie.iso.IsoCamera;
 import zombie.iso.IsoDepthHelper;
+import zombie.iso.IsoDirections;
 import zombie.iso.IsoGridSquare;
 import zombie.iso.IsoObject;
 import zombie.iso.IsoUtils;
@@ -605,14 +606,36 @@ public class WindSwayMod {
         WindSwayGrassDrawer.debugFail = v;
     }
 
-    // Arms both renderers again after a latch. Called per new world and
-    // from the console.
+    // Arms every latch again. Called per new world and from the console.
     public static void rearm() {
         WindSwayGrassDrawer.rearm();
         TreeRenderer.rearm();
+        TreeSway.rearm();
+        DepthAtlas.rearm();
+        rustleOk = true;
+        treeOreScaleOk = true;
+        mergeOk = true;
+        treePoolOk = true;
     }
 
     private static IsoWorld lastWorld;
+
+    // One-time loads and the two shader compiles, from OnGameBoot (Lua)
+    // and per new world: in the loading screen instead of the first tree
+    // list's frame.
+    public static void warmUp() {
+        try {
+            StencilHole.load();
+            TreeRenderer.initHandles();
+            TreeProfile.warm();
+            if (SpriteRenderer.instance != null) {
+                SpriteRenderer.instance.drawGeneric(new WindSwayGrassDrawer());
+                SpriteRenderer.instance.drawGeneric(new TreeRenderer.WarmDrawer());
+            }
+        } catch (Throwable t) {
+            trace("warm-up failed", t);
+        }
+    }
 
     // Debug: 5s counters plus reject/flush-trigger names in the console.
     public static volatile boolean debugLog = false;
@@ -795,12 +818,23 @@ public class WindSwayMod {
     }
 
     private static boolean rectsHitQuads(float[] r, int n) {
+        float ux0 = Float.MAX_VALUE;
+        float uy0 = Float.MAX_VALUE;
+        float ux1 = -Float.MAX_VALUE;
+        float uy1 = -Float.MAX_VALUE;
+        for (int i = 0; i < n; ++i) {
+            ux0 = Math.min(ux0, r[i * 4]);
+            uy0 = Math.min(uy0, r[i * 4 + 1]);
+            ux1 = Math.max(ux1, r[i * 4 + 2]);
+            uy1 = Math.max(uy1, r[i * 4 + 3]);
+        }
         for (int k = 0; k < pendingQuads.size(); ++k) {
             WindSwayGrassDrawer.GrassQuad q = pendingQuads.get(k);
             float x0 = q.ox - q.padL + Math.min(q.ox1, q.ox4) * q.w;
             float x1 = q.ox + q.w + q.padR + Math.max(q.ox2, q.ox3) * q.w;
             float y0 = q.oy + Math.min(q.oy1, q.oy2) * q.h;
             float y1 = q.oy + q.h + Math.max(q.oy3, q.oy4) * q.h;
+            if (ux0 >= x1 || ux1 <= x0 || uy0 >= y1 || uy1 <= y0) continue;
             for (int i = 0; i < n; ++i) {
                 if (r[i * 4] < x1 && r[i * 4 + 2] > x0 && r[i * 4 + 1] < y1 && r[i * 4 + 3] > y0) {
                     return true;
@@ -842,14 +876,19 @@ public class WindSwayMod {
                 flushPending();
                 return;
             }
-            float ax = IsoUtils.XToScreen(square.x, square.y, square.z, 0) - IsoCamera.frameState.offX;
-            float ay = IsoUtils.YToScreen(square.x, square.y, square.z, 0) - IsoCamera.frameState.offY;
             boolean precise = flushPrecise && objectRect(object, square, objRect);
+            if (!precise) {
+                float ax = IsoUtils.XToScreen(square.x, square.y, square.z, 0) - IsoCamera.frameState.offX;
+                float ay = IsoUtils.YToScreen(square.x, square.y, square.z, 0) - IsoCamera.frameState.offY;
+                objRect[0] = ax - TREE_OVERLAP_PAD;
+                objRect[1] = ay - TREE_OVERLAP_PAD;
+                objRect[2] = ax + TREE_OVERLAP_PAD;
+                objRect[3] = ay + TREE_OVERLAP_PAD;
+            }
+            // Union box first: the per-tree and per-quad scans are the
+            // expensive part and the miss is the common case.
             if (pendingTrees != null) {
-                boolean hit = precise
-                        ? TreeRenderer.anyTreeHits(pendingTrees, objRect)
-                        : !(ax + TREE_OVERLAP_PAD < treeMinX || ax - TREE_OVERLAP_PAD > treeMaxX
-                                || ay + TREE_OVERLAP_PAD < treeMinY || ay - TREE_OVERLAP_PAD > treeMaxY);
+                boolean hit = rectHitsTreeUnion(objRect) && (!precise || rectHitsTrees(objRect));
                 if (hit) {
                     flushPendingTrees(FLUSH_TREES_OBJ);
                 } else if (debugLog) {
@@ -857,10 +896,15 @@ public class WindSwayMod {
                 }
             }
             if (pendingQuads.isEmpty()) return;
-            boolean hitGrass = precise
-                    ? rectsHitQuads(objRect, 1)
-                    : !(ax + OVERLAP_PAD < pendMinX || ax - OVERLAP_PAD > pendMaxX
-                            || ay + OVERLAP_PAD < pendMinY || ay - OVERLAP_PAD > pendMaxY);
+            if (!precise) {
+                float ax = 0.5f * (objRect[0] + objRect[2]);
+                float ay = 0.5f * (objRect[1] + objRect[3]);
+                objRect[0] = ax - OVERLAP_PAD;
+                objRect[1] = ay - OVERLAP_PAD;
+                objRect[2] = ax + OVERLAP_PAD;
+                objRect[3] = ay + OVERLAP_PAD;
+            }
+            boolean hitGrass = rectsHitPending(objRect, 1) && (!precise || rectsHitQuads(objRect, 1));
             if (!hitGrass) {
                 if (debugLog) gateSkip5s++;
                 return;
@@ -925,6 +969,10 @@ public class WindSwayMod {
         if (treeFlushing) return false;
         try {
             if (!FBORenderCell.instance.renderTranslucentOnly) return false;
+            if (pendingQuads.isEmpty() && pendingTrees == null
+                    && (!enabled || !mergeOk || !TreeRenderer.active())) {
+                return false;
+            }
             FBORenderTrees list = (FBORenderTrees) drawer;
             int seeKind = TreeRenderer.seeThroughKind(list);
             boolean seeThrough = seeKind != 0;
@@ -960,9 +1008,10 @@ public class WindSwayMod {
             }
             int frame = IsoCamera.frameState.frameCount;
             if (pendingTrees != null && pendingTreeFrame != frame) {
-                // A pass that ended without its OnExit left this behind.
+                // A pass that ended without its OnExit left this behind; the
+                // list was never queued, so vanilla's release is ours to call.
                 trace("stale tree list dropped");
-                recycleList(pendingTrees);
+                pendingTrees.postRender();
                 pendingTrees = null;
             }
             if (seeFlush) {
@@ -989,7 +1038,10 @@ public class WindSwayMod {
             int at = dst.size();
             @SuppressWarnings("unchecked")
             ArrayList<Object> dstObj = (ArrayList<Object>) dst;
-            dstObj.addAll(src);
+            // addAll copies the source to an array first.
+            for (int i = 0; i < src.size(); ++i) {
+                dstObj.add(src.get(i));
+            }
             extendTreeBounds(dst, at);
             src.clear();
             recycleList(list);
@@ -1004,21 +1056,50 @@ public class WindSwayMod {
         }
     }
 
+    // Screen boxes of the held trees (x1 y1 x2 y2), computed once per tree:
+    // the gate below runs per vanilla draw.
+    private static float[] treeBoxes = new float[4 * 256];
+    private static int treeBoxCount;
+
     private static void extendTreeBounds(ArrayList<?> trees, int from) throws Throwable {
-        float offX = IsoCamera.frameState.offX;
-        float offY = IsoCamera.frameState.offY;
-        for (int i = from; i < trees.size(); ++i) {
-            Object tree = trees.get(i);
-            float tx = TreeRenderer.treeX(tree);
-            float ty = TreeRenderer.treeY(tree);
-            float tz = TreeRenderer.treeZ(tree);
-            float ax = IsoUtils.XToScreen(tx, ty, tz, 0) - offX;
-            float ay = IsoUtils.YToScreen(tx, ty, tz, 0) - offY;
-            if (ax < treeMinX) treeMinX = ax;
-            if (ax > treeMaxX) treeMaxX = ax;
-            if (ay < treeMinY) treeMinY = ay;
-            if (ay > treeMaxY) treeMaxY = ay;
+        int n = trees.size();
+        if (treeBoxes.length < n * 4) {
+            int cap = treeBoxes.length;
+            while (cap < n * 4) cap *= 2;
+            float[] grown = new float[cap];
+            System.arraycopy(treeBoxes, 0, grown, 0, treeBoxCount * 4);
+            treeBoxes = grown;
         }
+        float[] boxes = treeBoxes;
+        for (int i = from; i < n; ++i) {
+            TreeRenderer.treeBox(trees.get(i), treeBox);
+            int k = i * 4;
+            boxes[k] = treeBox[0];
+            boxes[k + 1] = treeBox[1];
+            boxes[k + 2] = treeBox[2];
+            boxes[k + 3] = treeBox[3];
+            if (treeBox[0] < treeMinX) treeMinX = treeBox[0];
+            if (treeBox[2] > treeMaxX) treeMaxX = treeBox[2];
+            if (treeBox[1] < treeMinY) treeMinY = treeBox[1];
+            if (treeBox[3] > treeMaxY) treeMaxY = treeBox[3];
+        }
+        treeBoxCount = n;
+    }
+
+    private static final float[] treeBox = new float[4];
+
+    private static boolean rectHitsTreeUnion(float[] r) {
+        return r[0] < treeMaxX && r[2] > treeMinX && r[1] < treeMaxY && r[3] > treeMinY;
+    }
+
+    private static boolean rectHitsTrees(float[] r) {
+        float[] boxes = treeBoxes;
+        for (int i = 0, k = 0; i < treeBoxCount; ++i, k += 4) {
+            if (boxes[k] < r[2] && boxes[k + 2] > r[0] && boxes[k + 1] < r[3] && boxes[k + 3] > r[1]) {
+                return true;
+            }
+        }
+        return false;
     }
 
     // Back to FBORenderTrees.s_pool (package-private); a list never queued is
@@ -1070,22 +1151,29 @@ public class WindSwayMod {
     // Screen-right is world (+1, -1): a blade bent that way crosses the W edge
     // of column x+1 or the N edge of row y; screen-left mirrors it. Bits 2
     // (left) / 4 (right) mark a fence or wall on one of those edges.
+    // nav[] is geometric adjacency (doGridNav), unlike n/s/e/w, which the
+    // path finder nulls at blocked edges.
     private static float barrierCode(IsoGridSquare sq) {
+        IsoGridSquare s = sq.getAdjacentSquare(IsoDirections.S);
+        IsoGridSquare sw = sq.getAdjacentSquare(IsoDirections.SW);
+        IsoGridSquare e = sq.getAdjacentSquare(IsoDirections.E);
+        IsoGridSquare ne = sq.getAdjacentSquare(IsoDirections.NE);
         float code = 0.0f;
-        if (edge(sq, 0, 0, true) || edge(sq, 0, 1, true) || edge(sq, 0, 1, false) || edge(sq, -1, 1, false)) {
+        if (westEdge(sq) || westEdge(s) || northEdge(s) || northEdge(sw)) {
             code += 2.0f;
         }
-        if (edge(sq, 1, 0, true) || edge(sq, 1, -1, true) || edge(sq, 0, 0, false) || edge(sq, 1, 0, false)) {
+        if (westEdge(e) || westEdge(ne) || northEdge(sq) || northEdge(e)) {
             code += 4.0f;
         }
         return code;
     }
 
-    private static boolean edge(IsoGridSquare from, int dx, int dy, boolean west) {
-        IsoGridSquare s = from.getCell().getGridSquare(from.x + dx, from.y + dy, from.z);
-        if (s == null) return false;
-        return west ? s.has(IsoFlagType.cutW) || s.has(IsoFlagType.collideW)
-                : s.has(IsoFlagType.cutN) || s.has(IsoFlagType.collideN);
+    private static boolean westEdge(IsoGridSquare s) {
+        return s != null && (s.has(IsoFlagType.cutW) || s.has(IsoFlagType.collideW));
+    }
+
+    private static boolean northEdge(IsoGridSquare s) {
+        return s != null && (s.has(IsoFlagType.cutN) || s.has(IsoFlagType.collideN));
     }
 
     // skipOn advice (Patch_FBORenderCell): true = engine skips the
@@ -1300,7 +1388,8 @@ public class WindSwayMod {
                 }
             }
 
-            ArrayList<WindSwayGrassDrawer.GrassQuad> parts = new ArrayList<>(2 + attachedCount);
+            ArrayList<WindSwayGrassDrawer.GrassQuad> parts = partsScratch;
+            parts.clear();
             parts.add(buildPart(tex, mainDepthTex, sprite, baseSx, baseSy,
                     scaleX, scaleY, scaleX, scaleY, inst.flip,
                     zNear, zFar, ore, lr, lg, lb, alpha));
@@ -1431,10 +1520,12 @@ public class WindSwayMod {
                 WindSwayGrassDrawer.fail("pending batch overflowed, pass advice not running?");
                 return false;
             }
-            pendingQuads.addAll(parts);
             for (int i = 0; i < parts.size(); ++i) {
-                extendPendingBounds(parts.get(i));
+                WindSwayGrassDrawer.GrassQuad q = parts.get(i);
+                pendingQuads.add(q);
+                extendPendingBounds(q);
             }
+            parts.clear();
             // Object-picker click boxes; normally refilled by the draw
             // we skip.
             if (!WeatherFxMask.isRenderingMask()
@@ -1472,6 +1563,8 @@ public class WindSwayMod {
     }
 
     private static final double SQRT2 = Math.sqrt(2.0);
+    // Game thread; the parts of one object between build and enqueue.
+    private static final ArrayList<WindSwayGrassDrawer.GrassQuad> partsScratch = new ArrayList<>(8);
 
     // fencing_burnt_01 trunks carry MoveWithWind without a tree flag: not
     // grass.
@@ -1608,6 +1701,9 @@ public class WindSwayMod {
         return q;
     }
 
+    private static int alphaStepFrame = -1;
+    private static float alphaStep;
+
     // IsoObject.updateAlpha replica. The in/out asymmetry matters: a
     // symmetric step snaps obscure fades around the player instead of
     // melting them.
@@ -1621,7 +1717,12 @@ public class WindSwayMod {
         if (square.getRoom() != null) {
             mul *= 2.0f;
         }
-        float step = 0.28f * GameTime.getInstance().getMultiplier();
+        int fc = IsoCamera.frameState.frameCount;
+        if (fc != alphaStepFrame) {
+            alphaStepFrame = fc;
+            alphaStep = 0.28f * GameTime.getInstance().getMultiplier();
+        }
+        float step = alphaStep;
         float alpha = object.getAlpha(playerIndex);
         if (alpha < target) {
             alpha = Math.min(target, alpha + step * mul);
@@ -1643,6 +1744,7 @@ public class WindSwayMod {
             if (world != lastWorld) {
                 lastWorld = world;
                 rearm();
+                warmUp();
             }
             if (!enabled) return;
 
@@ -1693,7 +1795,7 @@ public class WindSwayMod {
                 long grassFillNs = WindSwayGrassDrawer.cpuFillNs.getAndSet(0L);
                 long grassRuns = WindSwayGrassDrawer.diagRuns.getAndSet(0L);
                 long grassBinds = WindSwayGrassDrawer.diagBinds.getAndSet(0L);
-                trace(String.format("cpu (render thread): tree build %.3f draw %.3f ms/frame | grass batch %.3f ms/frame (fill %.3f, gl %.3f, runs/batch %.1f, binds/batch %.1f) | depth atlas cells %d/%d copies %d",
+                trace(String.format("cpu (render thread): tree build %.3f draw %.3f ms/frame | grass batch %.3f ms/frame (fill %.3f, gl %.3f, runs/batch %.1f, binds/batch %.1f) | depth atlas cells %d/%d copies %d evictions %d",
                         TreeRenderer.cpuBuildNs.getAndSet(0L) / 1.0e6 / frames,
                         TreeRenderer.cpuDrawNs.getAndSet(0L) / 1.0e6 / frames,
                         grassNs / 1.0e6 / frames,
@@ -1701,8 +1803,9 @@ public class WindSwayMod {
                         (grassNs - grassFillNs) / 1.0e6 / frames,
                         grassRuns / (double) Math.max(1, flushCount5s),
                         grassBinds / (double) Math.max(1, flushCount5s),
-                        DepthAtlas.diagCells, DepthAtlas.diagCapacity, DepthAtlas.diagCopies));
+                        DepthAtlas.diagCells, DepthAtlas.diagCapacity, DepthAtlas.diagCopies, DepthAtlas.diagEvictions));
                 DepthAtlas.diagCopies = 0;
+                DepthAtlas.diagEvictions = 0;
                 double perBatch = 1.0e3 / Math.max(1, flushCount5s);
                 trace(String.format("grass gl per batch (us): timer %.2f state %.2f upload %.2f attrib %.2f prog %.2f draw %.2f end %.2f",
                         WindSwayGrassDrawer.cpuTimerNs.getAndSet(0L) * perBatch / 1.0e6,
@@ -1753,14 +1856,14 @@ public class WindSwayMod {
     }
 
     // Render thread. GL errors never throw; the error flag is sampled
-    // around the first batches of a session and every few seconds after
+    // around the first few batches of a session and every few seconds after
     // that. Never per batch: the query can sync with the driver thread.
     static final class GlProbe {
         private int samples;
         private long lastMs;
 
         boolean begin() {
-            if (samples >= 100 && System.currentTimeMillis() - lastMs < 5000L) return false;
+            if (samples >= 8 && System.currentTimeMillis() - lastMs < 5000L) return false;
             while (GL11.glGetError() != GL11.GL_NO_ERROR) {
             }
             return true;

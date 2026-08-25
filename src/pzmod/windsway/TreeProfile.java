@@ -44,11 +44,17 @@ final class TreeProfile {
         return name != null && CONIFER.matcher(name.toLowerCase()).find();
     }
 
-    private static HashMap<String, TreeProfile> table;
+    private static volatile HashMap<String, TreeProfile> table;
     private static final IdentityHashMap<Texture, TreeProfile> cache = new IdentityHashMap<>(1024);
-    private static boolean tableFailed;
+    private static volatile boolean tableFailed;
 
-    private static void loadTable() {
+    // Any thread.
+    static void warm() {
+        if (table == null) loadTable();
+    }
+
+    private static synchronized void loadTable() {
+        if (table != null) return;
         HashMap<String, TreeProfile> map = new HashMap<>(1024);
         try (InputStream in = TreeProfile.class.getResourceAsStream("tree_profiles.txt")) {
             if (in == null) throw new IllegalStateException("tree_profiles.txt missing from jar");

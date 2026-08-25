@@ -67,6 +67,9 @@ local function syncToJava()
     applyToJava("setEnabled", enableOpt:getValue())
     applyToJava("setWindFloor", windFloorOpt:getValue())
     applyToJava("setTreeWindFloor", treeWindFloorOpt:getValue())
+    if WindSway.javaReady and ModJava.warmUp then
+        pcall(ModJava.warmUp)
+    end
 end
 
 Events.OnGameBoot.Add(syncToJava)

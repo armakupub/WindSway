@@ -111,7 +111,7 @@ public final class TreeSway {
     public static volatile double dir = 1.0;
     public static volatile double lastX = 0.0;
 
-    private static boolean ok = true;
+    private static volatile boolean ok = true;
     // Pool -> type * 15 + index per family; plant pool [0][0] is the first
     // pool updateStatic touches each frame and advances the frame globals.
     private static IdentityHashMap<ObjectRenderEffects, Integer> pools;
@@ -121,6 +121,12 @@ public final class TreeSway {
     private static int rebuilds;
 
     private TreeSway() {
+    }
+
+    static void rearm() {
+        if (ok) return;
+        ok = true;
+        WindSwayMod.trace("tree sway model re-armed");
     }
 
     static boolean isTreePool(ObjectRenderEffects ore) {
@@ -229,6 +235,9 @@ public final class TreeSway {
                 leafClock = wrap(leafClock
                         + (TreeRenderer.leafHz + (TreeRenderer.leafHzStorm - TreeRenderer.leafHz) * wind) * dtReal);
                 maskClock = wrap(maskClock + maskRate * dtReal);
+                double rk = Math.abs(dir) * plantCurve(wp) * (1.0 + 0.5 * plantBladeVar);
+                reachDown = (float) (rk * 1.3);
+                reachUp = (float) (rk * Math.max(0.0, upwindCap));
             }
 
             int i = idx;
@@ -246,6 +255,10 @@ public final class TreeSway {
         } catch (Throwable t) {
             ok = false;
             System.out.println("[WindSway] tree sway model disabled, trees follow vanilla: " + t);
+            // The clocks stop here; the renderers would keep drawing a
+            // frozen pose at full cost.
+            TreeRenderer.disable("wind model disabled");
+            WindSwayGrassDrawer.fail("wind model disabled");
             return false;
         }
     }
@@ -276,10 +289,12 @@ public final class TreeSway {
         return wind <= 0.0 ? 0.0 : Math.pow(wind, plantAmpPow) * (1.0 + stormGain * accent(wind));
     }
 
+    // Per-frame factors from the clock block; the capture calls this per part.
+    private static volatile float reachDown;
+    private static volatile float reachUp;
+
     static float plantReach(float ampPx, boolean downwind) {
-        double wind = wPlant;
-        double cap = downwind ? 1.3 : Math.max(0.0, upwindCap);
-        return (float) (ampPx * Math.abs(dir) * plantCurve(wind) * cap * (1.0 + 0.5 * plantBladeVar)) + 2.0f;
+        return ampPx * (downwind ? reachDown : reachUp) + 2.0f;
     }
 
     // Render thread, per batch: the nine windsway_grass uniforms (layout
