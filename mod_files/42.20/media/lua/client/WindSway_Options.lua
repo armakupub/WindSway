@@ -20,6 +20,22 @@ local function applyToJava(setterName, value)
     end
 end
 
+-- The vanilla tick box reads the forced getter and Apply writes it back.
+if MainOptions then
+    local create = MainOptions.create
+    function MainOptions:create()
+        create(self)
+        if not WindSway.javaReady or not ModJava.vanillaWindSpriteEffects then return end
+        local opt = self.gameOptions:get("doWindSpriteEffects")
+        if not opt then return end
+        function opt.toUI(self)
+            local ok, stored = pcall(ModJava.vanillaWindSpriteEffects)
+            if not ok then stored = getCore():getOptionDoWindSpriteEffects() end
+            self.control:setSelected(1, stored)
+        end
+    end
+end
+
 local modOptions = PZAPI.ModOptions:create("WindSway", "Wind Sway")
 
 if not WindSway.javaReady then

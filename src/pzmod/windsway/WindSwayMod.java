@@ -12,6 +12,7 @@ import me.zed_0xff.zombie_buddy.Exposer;
 import org.lwjgl.opengl.GL11;
 
 import zombie.GameTime;
+import zombie.config.BooleanConfigOption;
 import zombie.core.Core;
 import zombie.core.SpriteRenderer;
 import zombie.core.math.PZMath;
@@ -70,6 +71,26 @@ public class WindSwayMod {
 
     public static void setEnabled(boolean v) {
         enabled = v;
+    }
+
+    private static Field windOptionField;
+
+    // The forced getter would put a tick in the options screen that Apply
+    // writes back into options.ini.
+    public static boolean vanillaWindSpriteEffects() {
+        try {
+            Field f = windOptionField;
+            if (f == null) {
+                f = Accessor.findField(Core.class, "optionDoWindSpriteEffects");
+                if (f == null) throw new NoSuchFieldException("optionDoWindSpriteEffects");
+                f.setAccessible(true);
+                windOptionField = f;
+            }
+            return ((BooleanConfigOption) f.get(Core.getInstance())).getValue();
+        } catch (Throwable t) {
+            trace("vanilla wind option read failed: " + t);
+            return Core.getInstance().getOptionDoWindSpriteEffects();
+        }
     }
 
     // The two option sliders: remap bases for the plant channel
