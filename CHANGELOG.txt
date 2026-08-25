@@ -1,6 +1,15 @@
 Wind Sway - Changelog
 =====================
 
+0.3.3 - 2026-08-25
+  - Performance: less CPU work per frame in towns and along fence lines. The depth-map cache now recycles its cells, so it keeps working in dense areas and long sessions.
+  - Shaders and masks are prepared in the loading screen instead of stalling the first frame with trees.
+  - Fixed: grass and plant sway could turn jittery after about two hours in one session.
+  - Fixed: zoomed out, trees could blur or pick up bits of neighbouring sprites.
+  - Fixed: the depth-map cache could copy a map before it was uploaded; affected plants kept a wrong outline.
+  - Fixed: after a renderer fallback the mod stayed on vanilla until restart; it now re-arms with the next world.
+  - Fixed: saving the options with the mod running switched the game's own "Wind Sprite Effects" on for good, so it stayed on without the mod. Your setting is kept now; if it is on and you never set it, switch it off once.
+
 0.3.2 - 2026-08-24
   - Fixed: character and zombie shadows could turn into a sheet of changing game tiles.
     Thanks to @Ismællö for the report and the screenshot!
