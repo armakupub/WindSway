@@ -1,6 +1,12 @@
 Wind Sway - Changelog
 =====================
 
+0.3.4 - 2026-08-27
+  - The options hook now runs when the options screen opens, not while the main menu is built.
+  - Performance: fences and plain walls are drawn by the mod's batch now. Before, every fence piece split it into many small draws; fenced lots and towns run lighter.
+  - Fixed: zoomed out, fence wire and grass could shimmer while moving.
+  - New option "Tree detail": High, Medium, Low. Medium and Low drop the fine branch and leaf motion for weaker GPUs; on my card the tree pass costs 34 % and 62 % less.
+
 0.3.3 - 2026-08-25
   - Performance: less CPU work per frame in towns and along fence lines. The depth-map cache now recycles its cells, so it keeps working in dense areas and long sessions.
   - Shaders and masks are prepared in the loading screen instead of stalling the first frame with trees.

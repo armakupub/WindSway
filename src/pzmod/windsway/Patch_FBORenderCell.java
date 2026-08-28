@@ -32,18 +32,16 @@ public class Patch_FBORenderCell {
         }
     }
 
-    // Fences, walls, doors: mid-pass draws without depth writes, pending
-    // grass behind them must flush first. boolean+skipOn with constant
-    // false is deliberate: the void OnEnter form kills the whole advice
-    // unit (ZB weave shape).
+    // Fences, walls, doors: mid-pass draws without depth writes. Plain
+    // walls join the batch in paint order; anything else flushes the
+    // pending grass behind it first and draws in vanilla.
     @Patch(className = "zombie.iso.fboRenderChunk.FBORenderCell",
            methodName = "renderMinusFloor_DoorOrWall")
     public static class Patch_renderMinusFloor_DoorOrWall {
 
         @Patch.OnEnter(skipOn = true)
         public static boolean enter(@Patch.Argument(0) IsoObject object) {
-            WindSwayMod.onVanillaTranslucentDraw(object, true);
-            return false;
+            return WindSwayMod.tryCaptureWall(object);
         }
     }
 

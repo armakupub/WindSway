@@ -60,6 +60,7 @@ Everything sits under Options → Mods → Wind Sway.
 | Enable Wind Sway | on | Master switch: turns on the game's wind effects and draws swaying vegetation with the mod's own renderer. Off = back to your vanilla settings. |
 | Minimum sway (plants) | 0–0.5, default 0.2 | Sway in still air. Stronger weather shows as it is. 0 = vanilla wind only. |
 | Minimum sway (trees) | 0–0.5, default 0.2 | Same for tree crowns. 0 = vanilla wind only. |
+| Tree detail | High / Medium / Low, default High | Lower levels drop the fine branch and leaf motion, the crown still bends. For weaker GPUs. |
 
 ## FAQ
 

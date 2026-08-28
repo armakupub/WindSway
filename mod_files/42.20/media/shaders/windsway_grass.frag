@@ -67,15 +67,15 @@ vec4 diffuseAt(float s, vec2 uv)
 	{
 		if (s < 2.0)
 		{
-			return s < 1.0 ? texture2D(DIFFUSE0, uv, -1.0) : texture2D(DIFFUSE1, uv, -1.0);
+			return s < 1.0 ? texture2D(DIFFUSE0, uv, -8.0) : texture2D(DIFFUSE1, uv, -8.0);
 		}
-		return s < 3.0 ? texture2D(DIFFUSE2, uv, -1.0) : texture2D(DIFFUSE3, uv, -1.0);
+		return s < 3.0 ? texture2D(DIFFUSE2, uv, -8.0) : texture2D(DIFFUSE3, uv, -8.0);
 	}
 	if (s < 6.0)
 	{
-		return s < 5.0 ? texture2D(DIFFUSE4, uv, -1.0) : texture2D(DIFFUSE5, uv, -1.0);
+		return s < 5.0 ? texture2D(DIFFUSE4, uv, -8.0) : texture2D(DIFFUSE5, uv, -8.0);
 	}
-	return s < 7.0 ? texture2D(DIFFUSE6, uv, -1.0) : texture2D(DIFFUSE7, uv, -1.0);
+	return s < 7.0 ? texture2D(DIFFUSE6, uv, -8.0) : texture2D(DIFFUSE7, uv, -8.0);
 }
 
 // Taps outside the content rect read transparent: the page packs the
@@ -100,6 +100,17 @@ vec4 sampleDiffuse(float s, vec2 uv)
 	           mix(fetch(s, c00 + vec2(0.0, texel.y)), fetch(s, c00 + texel), f.x), f.y);
 }
 
+// Zoomed out: box over the pixel footprint (2^lod sprite px) from four
+// bilinear taps, so thin structures (fence wire) do not alias and crawl
+// with the camera. The page's own mip filter cannot be used: it is
+// NEAREST after a chunk bake and trilinear after an engine bind.
+vec4 sampleMinified(float s, vec2 uv, float lod)
+{
+	vec2 o = abs(vTexel.xy) * (0.25 * exp2(lod));
+	return 0.25 * (sampleDiffuse(s, uv + vec2(-o.x, -o.y)) + sampleDiffuse(s, uv + vec2(o.x, -o.y))
+	             + sampleDiffuse(s, uv + vec2(-o.x, o.y)) + sampleDiffuse(s, uv + o));
+}
+
 float depthAt(float s, vec2 uv)
 {
 	if (s < 4.0)
@@ -121,6 +132,12 @@ void main()
 {
 	vec2 uv = vUV1;
 	vec2 uv2 = vUV2;
+	// Sprite px per screen px from the unbent uv, before any discard can
+	// break the derivative quad.
+	vec2 texel0 = abs(vTexel.xy);
+	vec2 ddx = dFdx(vUV1) / texel0;
+	vec2 ddy = dFdy(vUV1) / texel0;
+	float lod = 0.5 * log2(max(max(dot(ddx, ddx), dot(ddy, ddy)), 1e-12));
 	float slot = floor(floor(vFrame.w) * 0.125);
 	float depthSlot = floor(slot * 0.125);
 	float diffuseSlot = slot - 8.0 * depthSlot;
@@ -174,7 +191,7 @@ void main()
 		vec2 dInt = floor(vec2(dx, dy) + 0.5);
 		uv2 = vUV2 - vec2(dInt.x * vTexel.z, dInt.y * vTexel.w);
 	}
-	vec4 c = sampleDiffuse(diffuseSlot, uv);
+	vec4 c = lod > 0.05 ? sampleMinified(diffuseSlot, uv, lod) : sampleDiffuse(diffuseSlot, uv);
 	float d = depthAt(depthSlot, uv2);
 	c *= vColor;
 	c.rgb *= vColor.a;

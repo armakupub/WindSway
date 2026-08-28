@@ -254,6 +254,17 @@ public class WindSwayGrassDrawer extends TextureDraw.GenericDrawer {
         float g;
         float b;
         float a;
+        // Wall lighting: one colour per corner (WallShaper col[1..3]), r/g/b is corner 0.
+        boolean lit;
+        float r1;
+        float g1;
+        float b1;
+        float r2;
+        float g2;
+        float b2;
+        float r3;
+        float g3;
+        float b3;
         // Wind flora: lean-axis position (tiles), seed, lean amplitude (sprite px
         // per unit lean), period (s), reach per side, the object's frame in this
         // part's uv, barrier bits 2 (left) / 4 (right).
@@ -653,22 +664,30 @@ public class WindSwayGrassDrawer extends TextureDraw.GenericDrawer {
         // aFrame.w: seed fraction, barrier bits 2/4, page slot pair above (times 8).
         float frameW = q.windSeed + q.barrier + 8.0f * slotCode;
         float[] o = quad;
-        putVertex(o, 0, xTL, yTL, q, uL, q.v0, duL, q.dv0, uMin, uMax, tU, tV, tDU, tDV, frameW);
-        putVertex(o, FLOATS, xTR, yTR, q, uR, q.v0, duR, q.dv0, uMin, uMax, tU, tV, tDU, tDV, frameW);
-        putVertex(o, 2 * FLOATS, xBR, yBR, q, uR, q.v1, duR, q.dv1, uMin, uMax, tU, tV, tDU, tDV, frameW);
-        putVertex(o, 3 * FLOATS, xBL, yBL, q, uL, q.v1, duL, q.dv1, uMin, uMax, tU, tV, tDU, tDV, frameW);
+        if (q.lit) {
+            putVertex(o, 0, xTL, yTL, q, q.r, q.g, q.b, uL, q.v0, duL, q.dv0, uMin, uMax, tU, tV, tDU, tDV, frameW);
+            putVertex(o, FLOATS, xTR, yTR, q, q.r1, q.g1, q.b1, uR, q.v0, duR, q.dv0, uMin, uMax, tU, tV, tDU, tDV, frameW);
+            putVertex(o, 2 * FLOATS, xBR, yBR, q, q.r2, q.g2, q.b2, uR, q.v1, duR, q.dv1, uMin, uMax, tU, tV, tDU, tDV, frameW);
+            putVertex(o, 3 * FLOATS, xBL, yBL, q, q.r3, q.g3, q.b3, uL, q.v1, duL, q.dv1, uMin, uMax, tU, tV, tDU, tDV, frameW);
+        } else {
+            putVertex(o, 0, xTL, yTL, q, q.r, q.g, q.b, uL, q.v0, duL, q.dv0, uMin, uMax, tU, tV, tDU, tDV, frameW);
+            putVertex(o, FLOATS, xTR, yTR, q, q.r, q.g, q.b, uR, q.v0, duR, q.dv0, uMin, uMax, tU, tV, tDU, tDV, frameW);
+            putVertex(o, 2 * FLOATS, xBR, yBR, q, q.r, q.g, q.b, uR, q.v1, duR, q.dv1, uMin, uMax, tU, tV, tDU, tDV, frameW);
+            putVertex(o, 3 * FLOATS, xBL, yBL, q, q.r, q.g, q.b, uL, q.v1, duL, q.dv1, uMin, uMax, tU, tV, tDU, tDV, frameW);
+        }
         b.put(o);
     }
 
     private static void putVertex(float[] o, int i, float x, float y, GrassQuad q,
+            float r, float g, float bl,
             float u, float v, float du, float dv,
             float uMin, float uMax, float tU, float tV, float tDU, float tDV, float frameW) {
         o[i] = x;
         o[i + 1] = y;
         o[i + 2] = q.zNear;
-        o[i + 3] = q.r;
-        o[i + 4] = q.g;
-        o[i + 5] = q.b;
+        o[i + 3] = r;
+        o[i + 4] = g;
+        o[i + 5] = bl;
         o[i + 6] = q.a;
         o[i + 7] = u;
         o[i + 8] = v;

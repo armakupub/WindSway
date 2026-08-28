@@ -33,6 +33,10 @@ import zombie.iso.IsoWorld;
 import zombie.characters.IsoGameCharacter;
 import zombie.iso.PlayerCamera;
 import zombie.iso.SpriteDetails.IsoFlagType;
+import zombie.iso.SpriteDetails.IsoObjectType;
+import zombie.characters.IsoPlayer;
+import zombie.core.Color;
+import java.util.function.Consumer;
 import zombie.iso.fboRenderChunk.FBORenderCell;
 import zombie.iso.fboRenderChunk.FBORenderCutaways;
 import zombie.iso.fboRenderChunk.FBORenderTrees;
@@ -43,6 +47,9 @@ import zombie.iso.fboRenderChunk.ObjectRenderInfo;
 import zombie.iso.objects.IsoBarbecue;
 import zombie.iso.objects.IsoCarBatteryCharger;
 import zombie.iso.objects.IsoCurtain;
+import zombie.iso.objects.IsoDoor;
+import zombie.iso.objects.IsoWindow;
+import zombie.iso.objects.IsoWindowFrame;
 import zombie.iso.objects.IsoFire;
 import zombie.iso.objects.IsoFireplace;
 import zombie.iso.objects.IsoMolotovCocktail;
@@ -669,6 +676,11 @@ public class WindSwayMod {
         TreeRenderer.lodMinPx = Math.max(0.0, px);
     }
 
+    // 0 low, 1 medium, 2 high.
+    public static void setTreeDetail(int level) {
+        TreeDetail.set(level);
+    }
+
     public static void setGpuTimer(boolean v) {
         GpuTimer.enabled = v;
     }
@@ -750,6 +762,8 @@ public class WindSwayMod {
     private static int flushTree5s = 0;
     private static int flushPass5s = 0;
     private static int gateSkip5s = 0;
+    private static int wallsCaptured5s = 0;
+    private static int flushOrder5s = 0;
     private static final ArrayList<String> flushSeen = new ArrayList<>();
     private static final HashSet<String> flushSeenSet = new HashSet<>();
     private static int flushSeenPrinted = 0;
@@ -931,13 +945,30 @@ public class WindSwayMod {
                 return;
             }
             noteFlushTrigger(object, doorOrWall);
-            flushPending();
+            flushPendingInOrder(FLUSH_TREES_OBJ);
         } catch (Throwable t) {
             // Ordering beats batching: if the bounds test dies, draw what
             // we have.
             flushPendingTrees(FLUSH_TREES_OBJ);
             flushPending();
         }
+    }
+
+    // Vanilla draws a held tree list before the next non-tree object, so
+    // quads captured after the hold paint after the trees. Drawn first,
+    // they write no depth and a tree drawn later covers them (a fence in
+    // front of a fir). Quads captured before the hold may go first, as in
+    // vanilla.
+    private static void flushPendingInOrder(int cause) {
+        if (pendingTrees != null) {
+            if (pendingQuads.size() > treeHoldQuadMark) {
+                if (debugLog) flushOrder5s++;
+                flushPendingTrees(cause);
+            } else {
+                treeHoldQuadMark = 0;
+            }
+        }
+        flushPending();
     }
 
     // Tree list merge. Vanilla cuts FBORenderTrees.current at every non-tree
@@ -950,6 +981,8 @@ public class WindSwayMod {
     // becomes the new pending list. Tree objects come from one ownerless pool.
     private static FBORenderTrees pendingTrees;
     private static int pendingTreeFrame = -1;
+    // pendingQuads.size() when the current hold began.
+    private static int treeHoldQuadMark;
     private static boolean treeFlushing;
     private static float treeMinX;
     private static float treeMinY;
@@ -1047,6 +1080,7 @@ public class WindSwayMod {
             if (pendingTrees == null) {
                 pendingTrees = list;
                 pendingTreeFrame = frame;
+                treeHoldQuadMark = pendingQuads.size();
                 treeMinX = Float.MAX_VALUE;
                 treeMinY = Float.MAX_VALUE;
                 treeMaxX = -Float.MAX_VALUE;
@@ -1205,6 +1239,285 @@ public class WindSwayMod {
             onVanillaTranslucentDraw(object, false);
         }
         return captured;
+    }
+
+    public static boolean tryCaptureWall(IsoObject object) {
+        boolean captured = captureWallInner(object);
+        if (!captured) {
+            onVanillaTranslucentDraw(object, true);
+        }
+        return captured;
+    }
+
+    // renderMinusFloor_DoorOrWall, plain case only: one wall direction,
+    // no cutaway on the square, no door or window, full alpha. Corners
+    // (two halved quads), SE walls, door frames and anything cut away
+    // keep the vanilla draw.
+    public static volatile boolean wallCapture = true;
+
+    public static void setWallCapture(boolean on) {
+        wallCapture = on;
+    }
+
+    private static boolean captureWallInner(IsoObject object) {
+        if (!enabled || !wallCapture) return false;
+        try {
+            if (!FBORenderCell.instance.renderTranslucentOnly) return false;
+            if (!Core.getInstance().getOptionDoWindSpriteEffects()) return false;
+            if (!WindSwayGrassDrawer.ready()) return false;
+            if (IsoSprite.seamFix2 != null) return false;
+            IsoSprite sprite = object.getSprite();
+            if (sprite == null) return false;
+            if (object instanceof IsoDoor || object instanceof IsoWindow || object instanceof IsoWindowFrame) {
+                return reject("wall:door", sprite);
+            }
+            if (object instanceof IsoThumpable && ((IsoThumpable) object).isDoor()) return reject("wall:door", sprite);
+            if (!rendersWallViaIsoObject(object.getClass())) return reject("wall:ownRender", sprite);
+            boolean cutN = sprite.cutN;
+            boolean cutW = sprite.cutW;
+            if (cutN == cutW) return reject("wall:corner", sprite);
+            if (object.isWallSE()) return reject("wall:se", sprite);
+            IsoObjectType t = sprite.getTileType();
+            if (t == IsoObjectType.doorFrN || t == IsoObjectType.doorN
+                    || t == IsoObjectType.doorFrW || t == IsoObjectType.doorW) {
+                return reject("wall:door", sprite);
+            }
+            if (sprite.getProperties().has(IsoFlagType.DoorWallN) || sprite.getProperties().has(IsoFlagType.DoorWallW)
+                    || sprite.getProperties().has(IsoFlagType.doorN) || sprite.getProperties().has(IsoFlagType.doorW)) {
+                return reject("wall:doorWall", sprite);
+            }
+            if (sprite.getProperties().has(IsoFlagType.NoWallLighting)) return reject("wall:noLight", sprite);
+            if ((sprite.depthFlags & 4) != 0) return reject("wall:opaque", sprite);
+            IsoGridSquare square = object.getSquare();
+            if (square == null) return reject("noSquare", sprite);
+            int playerIndex = IsoCamera.frameState.playerIndex;
+            if (square.getPlayerCutawayFlag(playerIndex, 0L) != 0) return reject("wall:cutaway", sprite);
+            ObjectRenderInfo renderInfo = object.getRenderInfo(playerIndex);
+            if (renderInfo.cutawayOutline) return reject("wall:cutaway", sprite);
+            if (renderInfo.targetAlpha != 1.0f) return reject("wall:alpha", sprite);
+            if (object.getSpriteModel() != null) return reject("model", sprite);
+            if (FBORenderObjectHighlight.getInstance().shouldRenderObjectHighlight(object)) {
+                return reject("highlight", sprite);
+            }
+            if (object.getOverlaySprite() != null) return reject("wall:overlay", sprite);
+            ArrayList<IsoSpriteInstance> attachments = object.getAttachedAnimSprite();
+            if (attachments != null && !attachments.isEmpty()) return reject("wall:attached", sprite);
+            if (object.hasAnimatedAttachments()) return reject("animAttach", sprite);
+            // renderWallTile draws nothing for these; vanilla still ends
+            // the object at alpha 1.
+            if (object.isSpriteInvisible()) {
+                object.setAlphaAndTarget(playerIndex, 1.0f);
+                return true;
+            }
+            IsoSpriteInstance inst = sprite.def;
+            if (inst == null) return reject("noDef", sprite);
+            Texture tex = sprite.getTextureForCurrentFrame(cutN ? IsoDirections.N : IsoDirections.W, object);
+            if (tex == null || tex.getTextureId() == null) return reject("noTex", sprite);
+            Texture depthTex = selectWallDepthTexture(sprite, cutN);
+            if (depthTex == null || depthTex.getTextureId() == null) return reject("noDepthTex", sprite);
+
+            float scaleX = inst.scaleX;
+            float scaleY = inst.scaleY;
+            int wOrig = tex.getWidthOrig();
+            int hOrig = tex.getHeightOrig();
+            if (Core.tileScale == 2 && wOrig == 64 && hOrig == 128) {
+                scaleX = 2.0f;
+                scaleY = 2.0f;
+            }
+            if (Core.tileScale == 2 && scaleX == 2.0f && scaleY == 2.0f && wOrig == 128 && hOrig == 256) {
+                scaleX = 1.0f;
+                scaleY = 1.0f;
+            }
+            if (scaleX <= 0.0f || scaleY <= 0.0f) return reject("badScale", sprite);
+
+            PlayerCamera camera = IsoCamera.cameras[playerIndex];
+            float offsetXParam = object.offsetX;
+            float offsetYParam = object.offsetY + object.getRenderYOffset() * (float) Core.tileScale;
+            float baseSx = IsoUtils.XToScreen(square.x + inst.offX, square.y + inst.offY, square.z + inst.offZ, 0);
+            float baseSy = IsoUtils.YToScreen(square.x + inst.offX, square.y + inst.offY, square.z + inst.offZ, 0);
+            baseSx -= offsetXParam;
+            baseSy -= offsetYParam;
+            baseSx += -IsoCamera.frameState.offX;
+            baseSy += -IsoCamera.frameState.offY;
+            float pickerX = baseSx;
+            float pickerY = baseSy;
+            float zoom = IsoCamera.frameState.zoom;
+            baseSx += camera.fixJigglyModelsX * zoom;
+            baseSy += camera.fixJigglyModelsY * zoom;
+
+            // setupTileDepthWall passes z2 == z: no renderYOffset ramp.
+            float jx = square.x + camera.fixJigglyModelsSquareX;
+            float jy = square.y + camera.fixJigglyModelsSquareY;
+            int camX = PZMath.fastfloor(IsoCamera.frameState.camCharacterX);
+            int camY = PZMath.fastfloor(IsoCamera.frameState.camCharacterY);
+            float zFar = IsoDepthHelper.getSquareDepthData(camX, camY, jx, jy, square.z).depthStart;
+            float zNear = IsoDepthHelper.getSquareDepthData(camX, camY, jx + 1.0f, jy + 1.0f, square.z + 1.0f).depthStart;
+
+            // DoWallLightingN/W: the flat colour is white and WallShaper
+            // replaces rgb per corner, so customColor and forceAmbient
+            // never reach the main sprite. Upper corners take the
+            // contrast tweak against the lower ones.
+            int vertU = square.getVertLight(0, playerIndex);
+            int vertU2 = square.getVertLight(4, playerIndex);
+            int vertL = square.getVertLight(cutN ? 1 : 3, playerIndex);
+            int vertL2 = square.getVertLight(cutN ? 5 : 7, playerIndex);
+            float[] c = wallCornerScratch;
+            unpackABGR(vertU2, c, 0);
+            unpackABGR(vertL, c, 3);
+            unpackTweaked(vertU, vertU2, c, 6);
+            unpackTweaked(vertL2, vertL, c, 9);
+            if (FBORenderCell.instance.isBlackedOutBuildingSquare(square)) {
+                float keep = 1.0f - FBORenderCell.instance.getBlackedOutRoomFadeRatio(square);
+                for (int i = 0; i < 12; ++i) c[i] *= keep;
+            }
+            // c: 0 colu2 (raw upper vert 4), 3 coll (raw lower vert 1/3),
+            // 6 colu (tweaked vert 0), 9 coll2 (tweaked vert 5/7).
+            // N: col0 colu2, col1 coll2, col2 coll, col3 colu.
+            // W: col0 coll2, col1 colu2, col2 colu, col3 coll.
+            int c0 = cutN ? 0 : 9;
+            int c1 = cutN ? 9 : 0;
+            int c2 = cutN ? 3 : 6;
+            int c3 = cutN ? 6 : 3;
+
+            WindSwayGrassDrawer.GrassQuad q = buildPart(tex, depthTex, sprite, baseSx, baseSy,
+                    scaleX, scaleY, 1.0f, 1.0f, inst.flip,
+                    zNear, zFar, null, c[c0], c[c0 + 1], c[c0 + 2], 1.0f);
+            q.lit = true;
+            q.r1 = c[c1];
+            q.g1 = c[c1 + 1];
+            q.b1 = c[c1 + 2];
+            q.r2 = c[c2];
+            q.g2 = c[c2 + 1];
+            q.b2 = c[c2 + 2];
+            q.r3 = c[c3];
+            q.g3 = c[c3 + 1];
+            q.b3 = c[c3 + 2];
+            if (debugTint) {
+                q.r1 = q.r2 = q.r3 = q.r;
+                q.g1 = q.g2 = q.g3 = q.g;
+                q.b1 = q.b2 = q.b3 = q.b;
+            }
+            if (pendingQuads.size() > 100000) {
+                pendingQuads.clear();
+                pendBoundsValid = false;
+                WindSwayGrassDrawer.fail("pending batch overflowed, pass advice not running?");
+                return false;
+            }
+            pendingQuads.add(q);
+            extendPendingBounds(q);
+            if (debugLog) wallsCaptured5s++;
+
+            // renderMinusFloor_DoorOrWall: setAlphaAndTarget(target),
+            // performDrawWallOnly ends with setAlpha(1); target is 1 here.
+            object.setAlphaAndTarget(playerIndex, 1.0f);
+            if (!WeatherFxMask.isRenderingMask()
+                    && !FBORenderObjectHighlight.getInstance().isRendering()
+                    && !FBORenderObjectOutline.getInstance().isRendering()) {
+                ObjectRenderInfo ri = object.getRenderInfo(playerIndex);
+                ri.renderX = pickerX;
+                ri.renderY = pickerY;
+                ri.renderWidth = wOrig * scaleX;
+                ri.renderHeight = hOrig * scaleY;
+                ri.renderScaleX = scaleX;
+                ri.renderScaleY = scaleY;
+                ri.renderAlpha = 1.0f;
+            }
+            wallNoPicking(object, sprite, square, playerIndex, cutN, cutW);
+            return true;
+        } catch (Throwable t) {
+            if (!wallCaptureFailedLogged) {
+                wallCaptureFailedLogged = true;
+                trace("wall capture failed, falling back to vanilla draw", t);
+            }
+            return false;
+        }
+    }
+
+    private static volatile boolean wallCaptureFailedLogged = false;
+    private static final float[] wallCornerScratch = new float[12];
+
+    private static void unpackABGR(int abgr, float[] out, int at) {
+        out[at] = Color.getRedChannelFromABGR(abgr);
+        out[at + 1] = Color.getGreenChannelFromABGR(abgr);
+        out[at + 2] = Color.getBlueChannelFromABGR(abgr);
+    }
+
+    // DoWallLightingN/W contrast step: each channel of col nudged 4.5 %
+    // away from ref.
+    private static void unpackTweaked(int col, int ref, float[] out, int at) {
+        float r = Color.getRedChannelFromABGR(col);
+        float g = Color.getGreenChannelFromABGR(col);
+        float b = Color.getBlueChannelFromABGR(col);
+        float rr = Color.getRedChannelFromABGR(ref);
+        float rg = Color.getGreenChannelFromABGR(ref);
+        float rb = Color.getBlueChannelFromABGR(ref);
+        out[at] = PZMath.clamp(r * (r >= rr ? 1.045f : 0.955f), 0.0f, 1.0f);
+        out[at + 1] = PZMath.clamp(g * (g >= rg ? 1.045f : 0.955f), 0.0f, 1.0f);
+        out[at + 2] = PZMath.clamp(b * (b >= rb ? 1.045f : 0.955f), 0.0f, 1.0f);
+    }
+
+    // setupWallDepth for the main sprite: authored map, else the preset
+    // for the direction (door-frame and SE presets are rejected before).
+    private static Texture selectWallDepthTexture(IsoSprite sprite, boolean north) {
+        TileDepthTexture authored = sprite.depthTexture;
+        if (authored != null && !authored.isEmpty()) {
+            return authored.getTexture();
+        }
+        return TileDepthMapManager.instance.getTextureForPreset(
+                north ? TileDepthMapManager.TileDepthPreset.NWall : TileDepthMapManager.TileDepthPreset.WWall);
+    }
+
+    // IsoObject.prepareToRender's picker gate for the skipped draw: a wall
+    // between the camera character and the viewer is not clickable.
+    private static void wallNoPicking(IsoObject object, IsoSprite sprite, IsoGridSquare square,
+            int playerIndex, boolean cutN, boolean cutW) {
+        if (IsoCamera.getCameraCharacter() == null) return;
+        float camCharacterX = IsoCamera.frameState.camCharacterX;
+        float camCharacterY = IsoCamera.frameState.camCharacterY;
+        float camCharacterZ = IsoCamera.frameState.camCharacterZ;
+        if (IsoWorld.instance.currentCell.IsPlayerWindowPeeking(playerIndex)) {
+            IsoPlayer player = IsoPlayer.players[playerIndex];
+            IsoDirections playerDir = IsoDirections.fromAngle(player.getForwardDirection());
+            if (playerDir == IsoDirections.N || playerDir == IsoDirections.NW) camCharacterY -= 1.0f;
+            if (playerDir == IsoDirections.W || playerDir == IsoDirections.NW) camCharacterX -= 1.0f;
+        }
+        boolean noPicking = false;
+        if ((square.getX() > camCharacterX || square.getY() > camCharacterY)
+                && PZMath.fastfloor(camCharacterZ) <= square.getZ()) {
+            boolean cutWest = cutW && square.getX() > camCharacterX;
+            boolean cutNorth = cutN && square.getY() > camCharacterY;
+            if (cutWest && square.getProperties().has(IsoFlagType.WallSE) && square.getY() <= camCharacterY) {
+                cutWest = false;
+            }
+            boolean cut = cutWest || cutNorth;
+            if (sprite.getProperties().has(IsoFlagType.halfheight)) cut = false;
+            if (cut) {
+                noPicking = object.rerouteMask == null
+                        && !(object instanceof IsoThumpable)
+                        && !sprite.getProperties().has(IsoFlagType.HoppableN)
+                        && !sprite.getProperties().has(IsoFlagType.HoppableW);
+            }
+        }
+        object.noPicking = noPicking;
+    }
+
+    private static final HashMap<Class<?>, Boolean> renderWallViaIsoObject = new HashMap<>();
+
+    // IsoThumpable's override only diverts double doors, rejected before.
+    private static boolean rendersWallViaIsoObject(Class<?> cls) {
+        Boolean known = renderWallViaIsoObject.get(cls);
+        if (known != null) return known;
+        boolean result;
+        try {
+            Class<?> decl = cls.getMethod("renderWallTile", IsoDirections.class, float.class, float.class,
+                    float.class, ColorInfo.class, boolean.class, boolean.class, Shader.class,
+                    Consumer.class).getDeclaringClass();
+            result = decl == IsoObject.class || decl == IsoThumpable.class;
+        } catch (Throwable t) {
+            result = false;
+        }
+        renderWallViaIsoObject.put(cls, result);
+        return result;
     }
 
     private static boolean captureGrassInner(IsoObject object) {
@@ -1781,8 +2094,10 @@ public class WindSwayMod {
                 lastWindLog = now;
                 trace(String.format("plantWind=%.3f raw=%.3f treeW=%.3f dir=%.2f poolX=%.3f rustleG=%.2f | flushes=%d quads=%d maxBatch=%d | alphaskip=%d",
                         ClimateManager.getWindTickFinal(), TreeSway.raw, TreeSway.w, TreeSway.dir, TreeSway.lastX, lastRustleGain, flushCount5s, flushQuads5s, maxBatch5s, diagAlphaSkips));
-                trace(String.format("flush causes: door=%d obj=%d tree=%d passEnd=%d | gateSkips=%d",
-                        flushDoor5s, flushObj5s, flushTree5s, flushPass5s, gateSkip5s));
+                trace(String.format("flush causes: door=%d obj=%d tree=%d passEnd=%d | gateSkips=%d | walls captured=%d | trees before grass=%d",
+                        flushDoor5s, flushObj5s, flushTree5s, flushPass5s, gateSkip5s, wallsCaptured5s, flushOrder5s));
+                wallsCaptured5s = 0;
+                flushOrder5s = 0;
                 trace(String.format("trees: lists=%d trees=%d draws=%d binds=%d maxList=%d",
                         TreeRenderer.diagRenders, TreeRenderer.diagTrees, TreeRenderer.diagDraws, TreeRenderer.diagBinds,
                         TreeRenderer.diagMaxTrees));

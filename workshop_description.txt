@@ -8,6 +8,7 @@ I built this for immersion: in vanilla the vegetation stands still most of the t
 [*][b]Trees bend[/b] from the trunk up. Leaves flutter, broad crowns move as a block, evergreens as a stiff cone. Scaled to tree size, jumbos included.
 [*][b]Wind has a direction and gusts[/b]: crowns lean with the rain, gusts roll through the forest, storms bend crowns over and hold them.
 [*][b]Sway in still air[/b]: two sliders, plants and trees, set the baseline. Stronger weather shows as it is, 0 = vanilla wind only.
+[*][b]Tree detail[/b]: High, Medium or Low; lower levels drop the fine branch and leaf motion for weaker GPUs.
 [*][b]Every plant moves[/b]: bushes and all wind plants, stiffer ones a little less.
 [*][b]Render-only[/b]: water, sounds and aiming stay on the real weather.
 [*][b]Own renderer[/b]: grass and trees drawn in batches instead of one draw call per sprite.

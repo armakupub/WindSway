@@ -179,6 +179,8 @@ public final class TreeRenderer {
     static final GpuTimer gpuTimer = new GpuTimer();
     static final AtomicLong cpuBuildNs = new AtomicLong();
     static final AtomicLong cpuDrawNs = new AtomicLong();
+    // Quad area of the current list in sprite px (= offscreen px).
+    private static double listArea;
     // Screen px under which a field is dropped (0 = never).
     static volatile double lodMinPx = 0.0;
     private static boolean glInfoLogged;
@@ -675,6 +677,7 @@ public final class TreeRenderer {
         stageF.clear();
         int vertCount = 0;
         Run cur = null;
+        double area = 0.0;
 
         for (int i = 0; i < trees.size(); ++i) {
             Object tree = trees.get(i);
@@ -935,9 +938,11 @@ public final class TreeRenderer {
                     stageF.put(o);
                     cur.count += 4;
                     vertCount += 4;
+                    area += (w + padL + padR) * (bottom - rowT);
                 }
             }
         }
+        listArea = area;
         diagRenders++;
         diagTrees += trees.size();
         if (trees.size() > diagMaxTrees) diagMaxTrees = trees.size();
@@ -1003,7 +1008,8 @@ public final class TreeRenderer {
         Matrix4f m = Core.getInstance().modelViewMatrixStack.alloc();
         m.set(mvCommon);
         Core.getInstance().modelViewMatrixStack.push(m);
-        boolean timed = diag && gpuTimer.begin();
+        double calArea = TreeDetail.timingArea(gpuTimer, listArea);
+        boolean timed = (diag || calArea > 0.0) && gpuTimer.begin(calArea);
         try {
             boolean glCheck = glProbe.begin();
             GL13.glActiveTexture(GL13.GL_TEXTURE0);
@@ -1124,6 +1130,7 @@ public final class TreeRenderer {
             if (timed) {
                 gpuTimer.end();
                 timed = false;
+                TreeDetail.update(gpuTimer);
             }
             if (glCheck) {
                 int err = glProbe.end();

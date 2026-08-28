@@ -21,18 +21,23 @@ local function applyToJava(setterName, value)
 end
 
 -- The vanilla tick box reads the forced getter and Apply writes it back.
+-- Hooked on toUI (options screen open), not create: MainScreen:create has
+-- no pcall around mainOptions:create(), a throw there empties the main menu.
 if MainOptions then
-    local create = MainOptions.create
-    function MainOptions:create()
-        create(self)
-        if not WindSway.javaReady or not ModJava.vanillaWindSpriteEffects then return end
-        local opt = self.gameOptions:get("doWindSpriteEffects")
-        if not opt then return end
-        function opt.toUI(self)
-            local ok, stored = pcall(ModJava.vanillaWindSpriteEffects)
-            if not ok then stored = getCore():getOptionDoWindSpriteEffects() end
-            self.control:setSelected(1, stored)
+    local toUI = MainOptions.toUI
+    function MainOptions:toUI()
+        if WindSway.javaReady and ModJava.vanillaWindSpriteEffects and not self.windSwayHooked then
+            self.windSwayHooked = true
+            local opt = self.gameOptions:get("doWindSpriteEffects")
+            if opt then
+                function opt.toUI(self)
+                    local ok, stored = pcall(ModJava.vanillaWindSpriteEffects)
+                    if not ok then stored = getCore():getOptionDoWindSpriteEffects() end
+                    self.control:setSelected(1, stored)
+                end
+            end
         end
+        toUI(self)
     end
 end
 
@@ -76,6 +81,19 @@ treeWindFloorOpt.onChangeApply = function(self, value)
     applyToJava("setTreeWindFloor", value)
 end
 
+-- Combo index 1..3 -> Java level 2..0.
+local treeDetailLevels = { 2, 1, 0 }
+local treeDetailOpt = modOptions:addComboBox(
+    "treeDetail",
+    "Tree detail",
+    "Lower levels drop the fine branch and leaf motion, the crown still bends.")
+treeDetailOpt:addItem("High", true)
+treeDetailOpt:addItem("Medium")
+treeDetailOpt:addItem("Low")
+treeDetailOpt.onChangeApply = function(self, selected)
+    applyToJava("setTreeDetail", treeDetailLevels[selected] or 2)
+end
+
 -- PZAPI.ModOptions:load() only auto-runs on first Options-screen open.
 -- Load+push on OnGameBoot so patches see saved values from frame one.
 local function syncToJava()
@@ -83,6 +101,7 @@ local function syncToJava()
     applyToJava("setEnabled", enableOpt:getValue())
     applyToJava("setWindFloor", windFloorOpt:getValue())
     applyToJava("setTreeWindFloor", treeWindFloorOpt:getValue())
+    applyToJava("setTreeDetail", treeDetailLevels[treeDetailOpt:getValue()] or 2)
     if WindSway.javaReady and ModJava.warmUp then
         pcall(ModJava.warmUp)
     end
@@ -94,3 +113,4 @@ WindSway.syncToJava = syncToJava
 WindSway.enableOpt = enableOpt
 WindSway.windFloorOpt = windFloorOpt
 WindSway.treeWindFloorOpt = treeWindFloorOpt
+WindSway.treeDetailOpt = treeDetailOpt
