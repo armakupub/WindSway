@@ -1,6 +1,20 @@
 Wind Sway - Changelog
 =====================
 
+0.4.0 - 2026-09-01
+  - Trees move by species: crown, branch and leaf traits come from the sprite family; hollies bounce their tiers, dogwood stirs in layers, maples carry a dense crown.
+  - Plants move by class and bushes by species: woody bushes bend as stem and crown, ferns bob their fronds, dead crops sway as dry stems, flower spikes nod. Their leaves flutter and flicker in patches like tree leaves; snow-laden flora is damped.
+  - Plants see their own wind, driven by the gusts instead of a steady blow: calm air is calm, a front shows as it sweeps through, tips lead, a sheen runs over the meadow.
+  - Spring and autumn foliage moves by its thinness: lone bush tufts swing near bare, scattered tree leaves get their flutter.
+  - Pick your wind: Calm, Normal, Windy or a custom band; the mod plays its own wandering wind while the game's weather is idle. New options "Weather overrides the wind setup" and "Wind sound", both on by default. The sliders reset once.
+  - Fixed: burned trees swayed like living ones.
+  - Fixed: trunks and branches painted inside the crown shimmered with the leaf flutter.
+  - Fixed: fences and walls could show holes or a grey fringe where swaying grass and trees overlapped them.
+  - Fixed: bush crowns could stay half faded after fading near the player.
+  - Fixed: tree and plant motion could drift or jitter in long sessions; the clocks run exact now.
+  - Performance: less CPU work per frame; the grass positions itself in the vertex shader and captured quads are reused instead of reallocated.
+  - Internal: the code base was reorganised and cleaned, no behaviour change.
+
 0.3.4 - 2026-08-27
   - The options hook now runs when the options screen opens, not while the main menu is built.
   - Performance: fences and plain walls are drawn by the mod's batch now. Before, every fence piece split it into many small draws; fenced lots and towns run lighter.

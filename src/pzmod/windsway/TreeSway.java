@@ -17,8 +17,7 @@ public final class TreeSway {
     public static volatile double ampPow = 2.2;
     public static volatile double ampFloor = 0.62;
     // Bushes (the shared tree pools; trees on the batch path strip the
-    // pool share in scaleTreeOre): fraction of sprite width at w = 1,
-    // exponent, period.
+    // pool share in scaleTreeOre).
     public static volatile double bushAmpMax = 0.3;
     public static volatile double bushAmpPow = 0.6;
     public static volatile double bushPeriod = 1.8;
@@ -26,24 +25,187 @@ public final class TreeSway {
     // instead of vanilla's hard thresholds (0.2 / 0.6) that froze types 2
     // and 3.
     public static volatile double plantAmpMax = 0.35;
-    public static volatile double plantAmpPow = 0.7;
-    public static volatile double plantPeriod = 1.4;
+    public static volatile double plantAmpPow = 0.8;
+    public static volatile double plantPeriod = 1.1;
     public static volatile double plantStiff2 = 0.6;
     public static volatile double plantStiff3 = 0.35;
-    public static volatile double plantBendPow = 1.5;
+    public static volatile double plantBendPow = 2.0;
     public static volatile double plantShorten = 0.5;
     public static volatile double plantBladeCell = 24.0;
     public static volatile double plantBladeVar = 0.5;
-    public static volatile double plantMean = 0.5;
+    public static volatile double plantMean = 0.55;
     // Barrier cap R: toward a fence or wall the lean amplitude A becomes
     // A * R / (R + A), so a bent blade barely reaches the element beside it.
     public static volatile double plantBarrierCap = 16.0;
+    public static volatile double plantLeafAmp = 0.6;
+    public static volatile double plantLeafAmpStorm = 1.5;
+    public static volatile double plantLeafRefPx = 96.0;
+    public static volatile double plantLeafSizePow = 0.5;
+    public static volatile double plantLeafDens = 0.5;
+    public static volatile double plantLeafGust = 0.35;
+    public static volatile double plantLeafRateSpread = 0.15;
+    public static volatile double plantLeafShade = 0.03;
+    // Period law over the content height: f ~ 1/H for self-similar blades,
+    // +-spread per object.
+    public static volatile double plantPeriodRefH = 1.2;
+    public static volatile double plantPeriodExp = 0.5;
+    public static volatile double plantPeriodSpread = 0.2;
+    // Ring model (windsway_grass_static.vert, plantModel 1): the swing is
+    // the impulse response of a damped oscillator at the object's own
+    // period to the local wind's change. Default 0: the standing sine with
+    // the energy envelope stays the shipped look.
+    public static volatile int plantModel = 0;
+    public static volatile double plantDamping = 0.25;
+    public static volatile double plantRingGain = 0.6;
+    // The ring is gated by the front energy of the slow octaves over its
+    // window (1 - exp(-E / rate^2)): a passing front rings the tuft, between
+    // fronts it settles. Without the gate a fine octave near f0 is a
+    // metronome and the tuft beats against it.
+    public static volatile double plantRingGate = 0.3;
+    // Share of the ring taken away at w 1: a storm is carried by the lean
+    // and the gust pushes, not by the ringing.
+    public static volatile double plantRingStormFade = 0.1;
+    // Plant octave lengths in tiles, shorter than the trees': gusts scale
+    // with the vegetation, tree-sized ones read as a steady blower.
+    public static volatile double plantTurbLen1 = 12.0;
+    public static volatile double plantTurbLen2 = 4.0;
+    // Plant swing (model 0): the shorter octaves' derivative is ~2.4x the
+    // trees' and threw the swing too often; a storm presses, it does not
+    // rock.
+    public static volatile double plantSwingGain = 1.0;
+    public static volatile double plantSwingRate = 1.0;
+    // Lean inertia: the lean follows a mix of the wind now and lagSeconds
+    // ago (the trees' leanSmooth); the swing carries the fast part.
+    public static volatile double plantLeanLag = 0.5;
+    public static volatile double plantLeanShare = 0.3;
+    // Light wind must still stir: the plants' fronts run faster than the
+    // trees' at calm (factor 1 + calm * (1 - w), own accumulator) and the
+    // per-object term breathes at its own rate (trees 0.12 Hz).
+    public static volatile double plantFrontCalm = 0.5;
+    public static volatile double plantLocalRate = 0.25;
+    // And faster than the trees' at storm too (factor 1 + storm * w): the
+    // pauses between gusts at w 1 felt too long.
+    public static volatile double plantFrontStorm = 0.5;
+    // Turbulence at storm: the per-object rate grows by localRateStorm * w,
+    // and a crosswind octave (noise across the lean axis, drifting in
+    // time) lets neighbours across the wind differ, the fronts alone are
+    // one-dimensional.
+    public static volatile double plantLocalRateStorm = 1.5;
+    // Soft cap of the plant lean at 1 + knee of the largest lean (the quad
+    // reach follows it).
+    public static volatile double plantCapKnee = 0.7;
+    public static volatile double plantCrossLen = 6.0;
+    public static volatile double plantCrossMix = 0.25;
+    public static volatile double plantCrossRate = 0.15;
+    // Bend exponent grows with the wind: a blade in a storm is stiff at
+    // the base and streams at the tip.
+    public static volatile double plantBendPowStorm = 1.0;
+    // Flutter: the galloping mode at a whole multiple of the swing rate.
+    // Off by default: at 6x the swing rate it reads as hectic.
+    public static volatile double plantFlutterAmp = 0.0;
+    public static volatile double plantFlutterOnset = 0.35;
+    public static volatile double plantFlutterRate = 6.0;
+    public static volatile double plantFlutterSpread = 0.5;
+    // Honami octave, plants only: the coherent wave over a meadow runs at
+    // 2-9 plant heights and 1.4-1.8x the wind at crown height.
+    public static volatile double honamiLen = 3.0;
+    public static volatile double honamiSpeed = 1.0;
+    public static volatile double honamiMix = 0.15;
+    // Dry grass (tan and orange sets, dead stalks, dry weeds): 5x the
+    // stiffness at a fifth of the mass; factors on period, lean, damping
+    // and flutter.
+    public static volatile double dryPeriod = 0.5;
+    public static volatile double dryLean = 0.7;
+    public static volatile double dryDamping = 0.6;
+    public static volatile double dryFlutter = 1.5;
+    // Blade tip physics and the gust sheen, in windsway_grass.frag.
+    public static volatile double plantTipLead = 0.12;
+    public static volatile double plantTipLeadPow = 2.0;
+    public static volatile double plantTipFast = 1.0;
+    public static volatile double plantTipFlick = 0.2;
+    public static volatile double plantSheenCalm = 0.03;
+    public static volatile double plantSheenStorm = 0.08;
+    public static volatile double plantSheenPow = 1.5;
+    // Woody body (bush crowns, bare bushes; PlantClass.block): the stems
+    // pivot at the foot as straight lines up to the knee, above it the
+    // crown rides as one piece with a residual shear of tail; a crown that
+    // shears over its whole height reads as rubber. Lobes on the crown
+    // parts: the trees' branch lattice on the branch clock, px at calm and
+    // at w 1, gated over w onset..full, breathing with the local wind.
+    public static volatile double plantBlockKnee = 0.35;
+    public static volatile double plantBlockTail = 0.25;
+    // Off by default: even at twig scale the lattice warp read as wobble
+    // on a bush crown; the leaf layer and the mask patches carry it.
+    public static volatile double plantLobeCalm = 0.0;
+    public static volatile double plantLobeStorm = 0.0;
+    public static volatile double plantLobeCell = 16.0;
+    public static volatile double plantLobeY = 0.35;
+    public static volatile double plantLobeOnset = 0.12;
+    public static volatile double plantLobeFull = 0.45;
+    // Leaf look as on the trees, crown parts by class: gated leaf layer,
+    // cluster cell for fine paint, drifting mask patches, brightness
+    // flicker.
+    public static volatile double plantLeafOnset = 0.04;
+    public static volatile double plantLeafFull = 0.6;
+    // The class steady floors return toward storm (a bush at w 0.8 holds
+    // its lean between the gusts), and the plants' turbulence contrast
+    // falls with the wind: steep scarce fronts in light air, filled
+    // valleys in a storm.
+    public static volatile double plantSteadyRampLo = 0.45;
+    public static volatile double plantSteadyRampHi = 0.9;
+    public static volatile double plantContrastCalm = 1.5;
+    public static volatile double plantContrastStorm = 1.0;
+    // Breeze: the mod's calm-wind simulation. The floor wanders inside
+    // the configured band (two slow noise octaves in real seconds);
+    // vanilla weather above the band wins through the max. Ceil <= floor
+    // = a static floor, both 0 = vanilla wind.
+    public static volatile double breezePeriod = 240.0;
+    public static volatile double breezePeriodFine = 60.0;
+    public static volatile double breezeFineWeight = 0.3;
+    // Weather takes the wind over: the band fades out while a weather
+    // period, precipitation or fog runs, back in when the sky clears.
+    public static volatile boolean weatherTakeover = true;
+    public static volatile double weatherBlend = 20.0;
+    private static double weatherGate = 0.0;
+    // Random start: the hash is deterministic, a zero start would replay
+    // the same breeze every fresh game.
+    private static double breezeClock = Math.random() * 1.0e7;
+    public static volatile double plantClusterRatePow = 0.35;
+    public static volatile double plantMaskStrength = 1.0;
+    public static volatile double plantMaskCell = 32.0;
+    public static volatile double plantMaskFloor = 0.4;
+    public static volatile double plantMaskGustDens = 0.6;
+    // Storm end below the trees': fast cell cycles over most of a crown
+    // read as a strobe.
+    public static volatile double plantFlickAmp = 0.04;
+    public static volatile double plantFlickAmpStorm = 0.05;
+    public static volatile double plantFlickRate = 1.0;
+    public static volatile double plantFlickDuty = 0.55;
+    public static volatile double plantFlickCell = 3.0;
+    public static volatile double plantFlickDensCalm = 0.05;
+    public static volatile double plantFlickDensStorm = 0.5;
+    public static volatile double plantFlickWindOnset = 0.1;
+    public static volatile double plantFlickDensGust = 0.4;
+    public static volatile double plantFlickGustOnset = 0.2;
+    public static volatile double plantFlickGustFull = 0.7;
+    public static volatile double plantFlickOutside = 0.2;
+    // Snow-laden flora (the engine swaps the texture on the same object,
+    // isUseSnowSprite; the sprite name stays the green one): factors on the
+    // lean, the leaf layer and the steady floors — frozen wood barely
+    // moves in light wind, the rest rides the gust fronts.
+    public static volatile double plantSnowLean = 0.3;
+    public static volatile double plantSnowLeaf = 0.05;
+    public static volatile double plantSnowSteady = 0.5;
     // Storm accent, smoothstep from stormOnset to 1: amplitude gain and a
     // lifted low point so a storm crown swings around a bent pose.
     public static volatile double stormOnset = 0.5;
     public static volatile double stormGain = 0.5;
     public static volatile double stormHold = 0.4;
+    // Ring period at periodRefH world units of content height, scaling
+    // with (height / ref)^TreeClass.periodExp; physical periods are 2-4x
+    // faster and read as straws in game.
     public static volatile double periodBase = 2.8;
+    public static volatile double periodRefH = 3.5;
     public static volatile double periodSpread = 0.2;
     public static volatile double stormSpeedup = 0.15;
     // Local wind: mix weights sum to 1 (mean 0.5), contrast around the mean.
@@ -100,8 +262,14 @@ public final class TreeSway {
     // Period-divided absolute time turned every wind drift into a phase run.
     public static volatile double ringClock = 0.0;
     public static volatile double advect = 0.0;
+    public static volatile double advectPlant = 0.0;
+    private static volatile double speedPlant = 0.0;
     public static volatile double branchClock = 0.0;
     public static volatile double leafClock = 0.0;
+    // Evergreen needles run their own clock: a wind-dependent factor on a
+    // per-tree rate times an absolute clock would turn wind drift into a
+    // phase run.
+    public static volatile double coniferLeafClock = 0.0;
     public static volatile double maskClock = 0.0;
     public static volatile double w = 0.0;
     public static volatile double wPlant = 0.0;
@@ -204,14 +372,25 @@ public final class TreeSway {
                 if (dtReal > MAX_DT) dtReal = MAX_DT;
                 if (dtReal < 0.0) dtReal = 0.0;
                 dtReal *= timeScale;
-                double floor = WindSwayMod.treeWindFloor;
+                breezeClock += dtReal;
+                double fw = breezeFineWeight;
+                double bn = (1.0 - fw) * breezeNoise(breezeClock / Math.max(1.0, breezePeriod), 71)
+                        + fw * breezeNoise(breezeClock / Math.max(1.0, breezePeriodFine) + 3.9, 73);
+                double gTarget = weatherTakeover && WindSwayMod.weatherActive() ? 1.0 : 0.0;
+                double gStep = weatherBlend > 0.0 ? dtReal / weatherBlend : 1.0;
+                weatherGate = gTarget > weatherGate ? Math.min(gTarget, weatherGate + gStep)
+                        : Math.max(gTarget, weatherGate - gStep);
+                double gKeep = 1.0 - weatherGate;
+                double floor = breezeAt(WindSwayMod.treeWindFloor, bn) * gKeep;
+                WindSwayMod.breezeTree = floor;
                 double r = WindSwayMod.rawWindTick();
                 raw = r;
                 double wind = Math.max(floor, r);
                 if (wind > 1.0) wind = 1.0;
                 if (wind < 0.0) wind = 0.0;
                 w = wind;
-                double pf = WindSwayMod.windFloor;
+                double pf = breezeAt(WindSwayMod.windFloor, bn) * gKeep;
+                WindSwayMod.breezePlant = pf;
                 double wp = Math.max(pf, r);
                 if (wp > 1.0) wp = 1.0;
                 if (wp < 0.0) wp = 0.0;
@@ -222,22 +401,28 @@ public final class TreeSway {
                 double tw = (wind - 0.1) / 0.9;
                 if (tw < 0.0) tw = 0.0;
                 double dtSway = dt * (swayTempoCalm + (swayTempoStorm - swayTempoCalm) * tw);
-                time = wrap(time + dtSway);
+                time += dtSway;
                 double speedup = 1.0 - stormSpeedup * wind;
-                swayClock = wrap(swayClock + dtSway / (speedup < 0.05 ? 0.05 : speedup));
+                swayClock = wrapSway(swayClock + dtSway / (speedup < 0.05 ? 0.05 : speedup));
                 double ds = dirSmooth;
                 dir += (angle - dir) * (ds > 0.0 ? Math.min(1.0, dtSway / ds) : 1.0);
                 treeTime += dtReal;
                 double ringSpeed = 1.0 - stormSpeedup * wind;
                 ringClock += dtReal / (ringSpeed < 0.05 ? 0.05 : ringSpeed);
                 advect += (dir < 0.0 ? -1.0 : 1.0) * (frontSpeed + frontSpeedWind * wind) * dtReal;
+                double sp = (frontSpeed + frontSpeedWind * wp) * (1.0 + plantFrontCalm * (1.0 - wp) + plantFrontStorm * wp);
+                speedPlant = sp;
+                advectPlant += (dir < 0.0 ? -1.0 : 1.0) * sp * dtReal;
                 branchClock = wrap(branchClock + lobeHz * dtReal);
-                leafClock = wrap(leafClock
-                        + (TreeRenderer.leafHz + (TreeRenderer.leafHzStorm - TreeRenderer.leafHz) * wind) * dtReal);
+                double leafRateNow = TreeRenderer.leafHz + (TreeRenderer.leafHzStorm - TreeRenderer.leafHz) * wind;
+                leafClock = wrap(leafClock + leafRateNow * dtReal);
+                coniferLeafClock = wrap(coniferLeafClock + leafRateNow
+                        * (TreeRenderer.coniferLeafHz + (TreeRenderer.coniferLeafHzStorm - TreeRenderer.coniferLeafHz) * wind) * dtReal);
                 maskClock = wrap(maskClock + maskRate * dtReal);
                 double rk = Math.abs(dir) * plantCurve(wp) * (1.0 + 0.5 * plantBladeVar);
-                reachDown = (float) (rk * 1.3);
+                reachDown = (float) (rk * (1.0 + Math.max(0.05, plantCapKnee)));
                 reachUp = (float) (rk * Math.max(0.0, upwindCap));
+                reachTip = (float) (Math.max(0.0, plantTipFlick) * plantCurve(wp));
             }
 
             int i = idx;
@@ -292,14 +477,20 @@ public final class TreeSway {
     // Per-frame factors from the clock block; the capture calls this per part.
     private static volatile float reachDown;
     private static volatile float reachUp;
+    private static volatile float reachTip;
 
     static float plantReach(float ampPx, boolean downwind) {
         return ampPx * (downwind ? reachDown : reachUp) + 2.0f;
     }
 
-    // Render thread, per batch: the nine windsway_grass uniforms (layout
+    // Largest snap lift of the tip in sprite px, for the quad's top pad.
+    static float plantTipLift(float ampPx) {
+        return ampPx * reachTip;
+    }
+
+    // Render thread, per batch: the windsway_grass uniforms (layout
     // contract).
-    static final int PLANT_UNIFORMS = 36;
+    static final int PLANT_UNIFORMS = 100;
 
     static void fillPlantUniforms(float[] u) {
         double wind = wPlant;
@@ -309,13 +500,13 @@ public final class TreeSway {
         u[2] = (float) dir;
         u[3] = (float) advect;
         u[4] = (float) treeTime;
-        u[5] = (float) ringClock;
+        u[5] = (float) (ringClock % SWAY_WRAP);
         u[6] = (float) (frontSpeed + frontSpeedWind * wt);
         u[7] = (float) plantMean;
-        u[8] = (float) turbLen1;
-        u[9] = (float) turbLen2;
-        u[10] = (float) turbLocalRate;
-        u[11] = (float) turbContrast;
+        u[8] = (float) plantSteadyRampLo;
+        u[9] = (float) plantSteadyRampHi;
+        u[10] = (float) plantLocalRate;
+        u[11] = (float) (plantContrastCalm + (plantContrastStorm - plantContrastCalm) * wind);
         u[12] = (float) turbMix1;
         u[13] = (float) turbMix2;
         u[14] = (float) turbMixLocal;
@@ -339,7 +530,105 @@ public final class TreeSway {
         u[32] = (float) plantBarrierCap;
         u[33] = WindSwayMod.plantBendOn ? 1.0f : 0.0f;
         u[34] = (float) (1.0 / Math.max(plantBladeCell, 1.0));
-        u[35] = 0.0f;
+        u[35] = (float) plantLeafShade;
+        double leafCycles = Math.floor(leafClock);
+        u[36] = (float) (leafCycles % 64.0);
+        u[37] = (float) plantLeafDens;
+        u[38] = (float) plantLeafGust;
+        u[39] = (float) plantLeafRateSpread;
+        u[40] = (float) (leafClock - leafCycles);
+        double branchCycles = Math.floor(branchClock);
+        u[41] = (float) (branchCycles % 64.0);
+        u[42] = (float) (branchClock - branchCycles);
+        u[43] = 0.0f;
+        u[44] = (float) plantTipLead;
+        u[45] = (float) Math.max(plantTipLeadPow, 0.01);
+        u[46] = (float) plantTipFast;
+        u[47] = (float) Math.max(0.0, plantTipFlick);
+        u[48] = (float) (plantSheenCalm + (plantSheenStorm - plantSheenCalm) * wind);
+        u[49] = (float) Math.max(plantSheenPow, 0.01);
+        u[50] = 0.0f;
+        u[51] = 0.0f;
+        u[52] = plantModel == 0 ? 0.0f : 1.0f;
+        u[53] = (float) plantBendPowStorm;
+        u[54] = (float) Math.max(0.0, plantDamping);
+        u[55] = (float) plantRingGain;
+        u[56] = (float) Math.max(0.0, plantFlutterAmp);
+        u[57] = (float) plantFlutterOnset;
+        u[58] = (float) Math.max(1.0, Math.round(plantFlutterRate));
+        u[59] = (float) plantFlutterSpread;
+        u[60] = (float) Math.max(0.1, honamiLen);
+        u[61] = (float) honamiSpeed;
+        u[62] = (float) Math.max(0.0, honamiMix);
+        u[63] = (float) Math.max(0.0, Math.min(0.9, plantPeriodSpread));
+        // Honami wavelength is set at the reference period and grows with
+        // the object's period (~ height): a bush sees a longer wave, and the
+        // ring's T/8 sampling never aliases on it.
+        u[64] = (float) Math.max(0.05, plantPeriod);
+        u[65] = (float) Math.max(0.001, plantRingGate);
+        u[66] = (float) Math.max(0.0, Math.min(1.0, plantRingStormFade));
+        u[67] = (float) Math.max(0.05, plantCapKnee);
+        u[68] = (float) Math.max(0.5, plantTurbLen1);
+        u[69] = (float) Math.max(0.5, plantTurbLen2);
+        u[70] = (float) Math.max(0.0, plantSwingGain);
+        u[71] = (float) Math.max(0.05, plantSwingRate);
+        u[72] = (float) Math.max(0.0, plantLeanLag);
+        u[73] = (float) Math.max(0.0, Math.min(1.0, plantLeanShare));
+        u[74] = (float) advectPlant;
+        u[75] = (float) speedPlant;
+        u[76] = (float) Math.max(0.5, plantCrossLen);
+        u[77] = (float) Math.max(0.0, plantCrossMix);
+        u[78] = (float) plantCrossRate;
+        u[79] = (float) Math.max(0.0, plantLocalRateStorm);
+        u[80] = (float) Math.max(0.05, Math.min(0.95, plantBlockKnee));
+        u[81] = (float) Math.max(0.0, plantBlockTail);
+        u[82] = (float) (1.0 / Math.max(plantLobeCell, 2.0));
+        u[83] = (float) Math.max(0.0, plantLobeY);
+        u[84] = (float) maskClock;
+        u[85] = (float) (1.0 / Math.max(plantMaskCell, 4.0));
+        u[86] = (float) Math.max(0.0, Math.min(1.0, plantMaskStrength));
+        u[87] = (float) Math.max(0.0, Math.min(1.0, plantMaskFloor));
+        double densLow = plantFlickDensCalm + (plantFlickDensStorm - plantFlickDensCalm) * smooth(plantFlickWindOnset, 1.0, wind);
+        u[88] = (float) Math.max(0.25, plantFlickRate);
+        u[89] = (float) plantFlickDuty;
+        u[90] = (float) densLow;
+        u[91] = (float) Math.max(densLow, plantFlickDensGust);
+        u[92] = (float) plantFlickGustOnset;
+        u[93] = (float) Math.max(plantFlickGustOnset + 0.01, plantFlickGustFull);
+        u[94] = (float) Math.max(0.0, Math.min(1.0, plantFlickOutside));
+        u[95] = (float) (1.0 / Math.max(plantFlickCell, 1.0));
+        u[96] = (float) Math.max(0.0, Math.min(1.0, plantMaskGustDens));
+        u[97] = (float) Math.pow(32.0 / Math.max(plantLobeCell, 2.0), 0.35);
+        u[98] = 0.0f;
+        u[99] = 0.0f;
+    }
+
+    private static double smooth(double a, double b, double x) {
+        double t = (x - a) / Math.max(1e-6, b - a);
+        if (t <= 0.0) return 0.0;
+        if (t >= 1.0) return 1.0;
+        return t * t * (3.0 - 2.0 * t);
+    }
+
+    // Leaf layer ramp from onset to full wind (a gust at low w stirs the
+    // leaves, it does not swing the whole crown), flicker amplitude at the
+    // plants' wind before the class contrast.
+    static double plantLeafGate(double wind) {
+        return smooth(plantLeafOnset, Math.max(plantLeafOnset + 0.001, plantLeafFull), wind);
+    }
+
+    static float plantFlickPx(double wind) {
+        return (float) ((plantFlickAmp + (plantFlickAmpStorm - plantFlickAmp) * wind) * plantLeafGate(wind));
+    }
+
+    // Lobe amplitude of a crown part at the plants' wind, before the class
+    // factor and the local wind (vertex).
+    static float plantLobePx(double wind) {
+        double t = (wind - plantLobeOnset) / Math.max(0.001, plantLobeFull - plantLobeOnset);
+        if (t <= 0.0) return 0.0f;
+        if (t > 1.0) t = 1.0;
+        t = t * t * (3.0 - 2.0 * t);
+        return (float) ((plantLobeCalm + (plantLobeStorm - plantLobeCalm) * wind) * t);
     }
 
     // Swing shape in 0..1 with the storm hold applied.
@@ -352,10 +641,25 @@ public final class TreeSway {
         return t > 65536.0 ? t - 65536.0 : t;
     }
 
+    // The swing clocks wrap at SWAY_WRAP seconds and every swing period is
+    // SWAY_WRAP / (11 m): the wrap is then 11 m cycles of the main sine and
+    // 6 m / 20 m of the 11/6 and 0.55 companions, all whole, so the phase
+    // is seamless and the clock stays small enough for a float.
+    static final double SWAY_WRAP = 2048.0;
+
+    private static double wrapSway(double t) {
+        return t >= SWAY_WRAP ? t - SWAY_WRAP : t;
+    }
+
+    static double quantPeriod(double period) {
+        double m = Math.max(1.0, Math.round(SWAY_WRAP / (11.0 * period)));
+        return SWAY_WRAP / (11.0 * m);
+    }
+
     // Two sines between upright and full lean, breathing in amplitude.
     private static double base(double ts, double t, double period, float p1, float p2, float p3, float p4) {
         double c1 = ts / period + p1;
-        double c2 = ts / (period * 1.83) + p2;
+        double c2 = ts / (period * 11.0 / 6.0) + p2;
         double s = 0.55 * Math.sin(TWO_PI * c1) + 0.45 * Math.sin(TWO_PI * c2);
         double breathe = 0.75 + 0.25 * Math.sin(TWO_PI * (t / (9.0 + 6.0 * p3) + p4));
         return breathe * (0.5 + 0.5 * s);
@@ -363,7 +667,7 @@ public final class TreeSway {
 
     private static double poolLean(int i) {
         double wind = w;
-        double period = bushPeriod * (1.0 - periodSpread + 2.0 * periodSpread * hash(i, 4));
+        double period = quantPeriod(bushPeriod * (1.0 - periodSpread + 2.0 * periodSpread * hash(i, 4)));
         return dir * bushAmplitude(wind) * swing(wind, swayClock, time, period, hash(i, 1), hash(i, 2), hash(i, 3), hash(i, 5));
     }
 
@@ -373,7 +677,7 @@ public final class TreeSway {
         int type = i / 15;
         double stiff = type == 0 ? 1.0 : (type == 1 ? plantStiff2 : plantStiff3);
         double amp = plantAmpMax * Math.pow(wind, plantAmpPow) * (1.0 + stormGain * accent(wind)) * stiff;
-        double period = plantPeriod * (1.0 - periodSpread + 2.0 * periodSpread * hash(i, 4)) / (0.7 + 0.3 * stiff);
+        double period = quantPeriod(plantPeriod * (1.0 - periodSpread + 2.0 * periodSpread * hash(i, 4)) / (0.7 + 0.3 * stiff));
         return dir * amp * swing(wind, swayClock, time, period, hash(i + 64, 1), hash(i + 64, 2), hash(i + 64, 3), hash(i + 64, 5));
     }
 
@@ -381,11 +685,11 @@ public final class TreeSway {
     private static double sW;
     private static double sAmp;
     private static double sTreeTime;
-    private static double sRingClock;
-    private static double sAdvect;
+    static double sRingClock;
+    static double sAdvect;
     private static double sAdvSign;
     private static double sAdvSpeed;
-    private static double sDir;
+    static double sDir;
     // Per tree after lean(): local wind, change energy, swing energy.
     static double localWind;
     static double localEnergyRaw;
@@ -405,6 +709,25 @@ public final class TreeSway {
 
     static double listWind() {
         return sW;
+    }
+
+    // Value-only twin of noise() for the game-thread breeze: nv/nd belong
+    // to the render thread's turbulence.
+    private static double breezeNoise(double x, int salt) {
+        double fl = Math.floor(x);
+        int i = (int) fl;
+        double f = x - fl;
+        double a = hash(i, salt);
+        double b = hash(i + 1, salt);
+        return a + (b - a) * f * f * (3.0 - 2.0 * f);
+    }
+
+    private static double breezeAt(double level, double n) {
+        double hi = WindSwayMod.windCeil;
+        if (hi < level) hi = level;
+        if (hi <= 0.0) return 0.0;
+        double b = level + (hi - level) * n;
+        return b > 1.0 ? 1.0 : b;
     }
 
     // 1D value noise, value and d/dx.
@@ -458,9 +781,9 @@ public final class TreeSway {
         }
     }
 
-    // Render thread, after prepareList(). Lean in ORE units; sizeF 1 regular,
-    // 3/5/7 jumbo.
-    static double lean(float tx, float ty, float sizeF, int seed) {
+    // Render thread, after prepareList(). Lean in ORE units; periodFactor
+    // and ringFactor come from the tree's height, class and foliage.
+    static double lean(float tx, float ty, double periodFactor, double ringFactor, int seed) {
         double wind = sW;
         if (wind <= 0.0) {
             localWind = 0.0;
@@ -516,10 +839,10 @@ public final class TreeSway {
         e *= sens;
         if (e > 1.0) e = 1.0;
         // Soft cap at 1.3 of the largest lean (the quad reach assumes it).
-        double period = periodBase * (1.0 + 0.12 * (sizeF - 1.0f))
+        double period = periodBase * periodFactor
                 * (1.0 - periodSpread + 2.0 * periodSpread * hPeriod);
         double rest = ringRest + (1.0 - ringRest) * wind;
-        double swing = ringGain * energy * sens * (rest + (1.0 - rest) * e);
+        double swing = ringGain * ringFactor * energy * sens * (rest + (1.0 - rest) * e);
         double ph = sRingClock / period;
         double ring = swing * (Math.sin(TWO_PI * (ph + hRing))
                 + ringFast * wind * Math.sin(TWO_PI * (ph / 0.55 + 3.7 * hRing)));

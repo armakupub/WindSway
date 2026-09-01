@@ -28,7 +28,7 @@ public class Patch_FBORenderCell {
 
         @Patch.OnEnter(skipOn = true)
         public static boolean enter(@Patch.Argument(0) IsoObject object) {
-            return WindSwayMod.tryCaptureGrass(object);
+            return GrassCapture.tryCaptureGrass(object);
         }
     }
 
@@ -41,7 +41,7 @@ public class Patch_FBORenderCell {
 
         @Patch.OnEnter(skipOn = true)
         public static boolean enter(@Patch.Argument(0) IsoObject object) {
-            return WindSwayMod.tryCaptureWall(object);
+            return GrassCapture.tryCaptureWall(object);
         }
     }
 
@@ -54,7 +54,7 @@ public class Patch_FBORenderCell {
 
         @Patch.OnEnter(skipOn = true)
         public static boolean enter(@Patch.Argument(0) IsoObject object) {
-            WindSwayMod.onVanillaTranslucentDraw(object, false);
+            GrassCapture.onVanillaFloorDraw(object);
             return false;
         }
     }

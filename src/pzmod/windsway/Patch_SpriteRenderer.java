@@ -14,7 +14,7 @@ public class Patch_SpriteRenderer {
 
         @Patch.OnEnter(skipOn = true)
         public static boolean enter(@Patch.Argument(0) TextureDraw.GenericDrawer drawer) {
-            return WindSwayMod.onTreeListDraw(drawer);
+            return BatchSequencer.onTreeListDraw(drawer);
         }
     }
 }

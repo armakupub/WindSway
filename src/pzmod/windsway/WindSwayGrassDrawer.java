@@ -107,9 +107,11 @@ public class WindSwayGrassDrawer extends TextureDraw.GenericDrawer {
     // re-specs VBO+IBO via glBufferData every call, built for once per
     // pass, fatal at ~140 interleave breaks per frame. Attrib layout
     // follows the VBORenderer convention (location == element index):
-    // pos3f, color4f, uv0, uv1, depth1f, wind4f, rect4f, texel4f, frame4f
+    // pos3f, color4f, uv0, uv1, depth1f, wind4f, rect4f, texel4f, frame4f,
+    // leaf4f, class4f (bend exponent, blade spread, tip factor, sheen factor),
+    // class3 4f (damping factor, flutter factor, cross position, steady share)
     // (layout contract with windsway_grass_static.vert).
-    private static final int STRIDE = 112;
+    private static final int STRIDE = 192;
     private static final int FLOATS = STRIDE / 4;
     private static int streamCapacity = 4 * 1024 * 1024;
     private static int streamVbo = 0;
@@ -152,7 +154,14 @@ public class WindSwayGrassDrawer extends TextureDraw.GenericDrawer {
         GL20.glVertexAttribPointer(6, 4, GL11.GL_FLOAT, false, STRIDE, 64L);
         GL20.glVertexAttribPointer(7, 4, GL11.GL_FLOAT, false, STRIDE, 80L);
         GL20.glVertexAttribPointer(8, 4, GL11.GL_FLOAT, false, STRIDE, 96L);
+        GL20.glVertexAttribPointer(9, 4, GL11.GL_FLOAT, false, STRIDE, 112L);
+        GL20.glVertexAttribPointer(10, 4, GL11.GL_FLOAT, false, STRIDE, 128L);
+        GL20.glVertexAttribPointer(11, 4, GL11.GL_FLOAT, false, STRIDE, 144L);
+        GL20.glVertexAttribPointer(12, 4, GL11.GL_FLOAT, false, STRIDE, 160L);
+        GL20.glVertexAttribPointer(13, 4, GL11.GL_FLOAT, false, STRIDE, 176L);
     }
+
+    private static final int NUM_ATTRIBS = 14;
     private static int uWind = -1;
     private static int uClock = -1;
     private static int uTurb = -1;
@@ -162,6 +171,24 @@ public class WindSwayGrassDrawer extends TextureDraw.GenericDrawer {
     private static int uRing2 = -1;
     private static int uPlant = -1;
     private static int uPlant2 = -1;
+    private static int uLeafP = -1;
+    private static int uLeafQ = -1;
+    private static int uTip = -1;
+    private static int uSheen = -1;
+    private static int uModel = -1;
+    private static int uFlut = -1;
+    private static int uHon = -1;
+    private static int uHon2 = -1;
+    private static int uPTurb = -1;
+    private static int uLean = -1;
+    private static int uCross = -1;
+    private static int uBody = -1;
+    private static int uLeafM = -1;
+    private static int uFlick = -1;
+    private static int uFlick2 = -1;
+    private static int uLeafM2 = -1;
+    private static int uCamA = -1;
+    private static int uCamB = -1;
     private static final float[] plantU = new float[TreeSway.PLANT_UNIFORMS];
 
     // Up to eight diffuse and eight depth pages per run (units 0..7 and
@@ -223,6 +250,9 @@ public class WindSwayGrassDrawer extends TextureDraw.GenericDrawer {
     public static final class GrassQuad {
         Texture tex;
         Texture depthTex;
+        // Contrast carriers the merge barrier guards: walls, fences,
+        // grass over ground snow.
+        boolean wall;
         // Screen rect in the scene's zoomed pixel space.
         float ox;
         float oy;
@@ -269,6 +299,8 @@ public class WindSwayGrassDrawer extends TextureDraw.GenericDrawer {
         // per unit lean), period (s), reach per side, the object's frame in this
         // part's uv, barrier bits 2 (left) / 4 (right).
         float windS;
+        // Position across the lean axis (tiles), for the crosswind octave.
+        float windT;
         float windSeed;
         float windAmp;
         float windPeriod;
@@ -278,12 +310,208 @@ public class WindSwayGrassDrawer extends TextureDraw.GenericDrawer {
         float frameBottom;
         float frameLeft;
         float barrier;
+        // Plant class of this part (-1 = not wind flora), leaf flutter
+        // amplitude x/y (sprite px at the current wind), cell (px), rate
+        // factor, top pad for the flutter, and the object's bend exponent
+        // and blade spread factors.
+        int cls = -1;
+        // Bush genus of this part's sprite (-1 = none).
+        int genus = -1;
+        float leafX;
+        float leafY;
+        float leafCell;
+        float leafRate;
+        float padT;
+        float bendPow = 1.0f;
+        float bladeVar = 1.0f;
+        // Class factors on the tip physics and the gust sheen; dry factors
+        // on the damping and the flutter.
+        float tipF;
+        float sheenF;
+        float dampF = 1.0f;
+        float flutF = 1.0f;
+        float steadyF = 1.0f;
+        // Body of the object's class: stem-and-block profile share, swing
+        // factor, lean inertia factor; lobe amplitude of this part (px).
+        float block;
+        float swingF = 1.0f;
+        float inertiaF = 1.0f;
+        float lobePx;
+        // Leaf look of this part: flicker amplitude (brightness), mask share.
+        float flickPx;
+        float maskF;
+        // World lane (world-space vertices): the square, its screen anchor
+        // at capture (the exact-split base of the corner pixel offsets) and
+        // the render-y depth shift.
+        float sqX;
+        float sqY;
+        float sqZ;
+        float anchorX;
+        float anchorY;
+        float depthShift;
+
+        // Screen box of the padded, ORE-displaced quad, x1 y1 x2 y2 in
+        // offscreen px.
+        void bounds(float[] out) {
+            out[0] = ox - padL + Math.min(ox1, ox4) * w;
+            out[1] = oy + Math.min(oy1, oy2) * h;
+            out[2] = ox + w + padR + Math.max(ox2, ox3) * w;
+            out[3] = oy + h + Math.max(oy3, oy4) * h;
+        }
+
+        // Back to the fresh-object state for every field buildPart and the
+        // captures write only conditionally; the rest is overwritten
+        // unconditionally on reuse.
+        void reset() {
+            tex = null;
+            depthTex = null;
+            wall = false;
+            lit = false;
+            ox1 = 0.0f; oy1 = 0.0f; ox2 = 0.0f; oy2 = 0.0f;
+            ox3 = 0.0f; oy3 = 0.0f; ox4 = 0.0f; oy4 = 0.0f;
+            r1 = 0.0f; g1 = 0.0f; b1 = 0.0f;
+            r2 = 0.0f; g2 = 0.0f; b2 = 0.0f;
+            r3 = 0.0f; g3 = 0.0f; b3 = 0.0f;
+            windS = 0.0f; windT = 0.0f; windSeed = 0.0f;
+            windAmp = 0.0f; windPeriod = 0.0f;
+            padL = 0.0f; padR = 0.0f; padT = 0.0f;
+            frameTop = 0.0f; frameBottom = 0.0f; frameLeft = 0.0f;
+            barrier = 0.0f;
+            cls = -1;
+            genus = -1;
+            leafX = 0.0f; leafY = 0.0f; leafCell = 0.0f; leafRate = 0.0f;
+            bendPow = 1.0f; bladeVar = 1.0f;
+            tipF = 0.0f; sheenF = 0.0f;
+            dampF = 1.0f; flutF = 1.0f; steadyF = 1.0f;
+            block = 0.0f; swingF = 1.0f; inertiaF = 1.0f;
+            lobePx = 0.0f; flickPx = 0.0f; maskF = 0.0f;
+            sqX = 0.0f; sqY = 0.0f; sqZ = 0.0f;
+            anchorX = 0.0f; anchorY = 0.0f; depthShift = 0.0f;
+        }
+    }
+
+    // Quad pool: capture allocated ~4750 quads per frame (~170 MB/s of
+    // garbage at the frame cap). The game thread pops from its private
+    // list and refills in bulk from the render thread's returns: one lock
+    // per handoff, not per quad.
+    private static final int POOL_CAP = 20000;
+    private static final ArrayList<GrassQuad> quadPool = new ArrayList<>(4096);
+    private static final ArrayList<GrassQuad> quadReturns = new ArrayList<>(4096);
+    private static volatile boolean returnsAvailable;
+    static int poolHit5s;
+    static int poolMiss5s;
+
+    // Game thread.
+    static GrassQuad obtainQuad() {
+        ArrayList<GrassQuad> pool = quadPool;
+        if (pool.isEmpty() && returnsAvailable) {
+            synchronized (quadReturns) {
+                pool.addAll(quadReturns);
+                quadReturns.clear();
+                returnsAvailable = false;
+            }
+        }
+        int n = pool.size();
+        if (n == 0) {
+            if (WindSwayMod.debugLog) poolMiss5s++;
+            return new GrassQuad();
+        }
+        if (WindSwayMod.debugLog) poolHit5s++;
+        return pool.remove(n - 1);
+    }
+
+    // Render thread, after the last segment of a batch drew. reset() runs
+    // outside the lock; the texture refs are dropped so a pooled quad
+    // never pins a page past a world unload.
+    private static void recycle(ArrayList<GrassQuad> qs) {
+        for (int i = 0; i < qs.size(); ++i) {
+            qs.get(i).reset();
+        }
+        synchronized (quadReturns) {
+            int room = POOL_CAP - quadReturns.size();
+            for (int i = 0; i < qs.size() && room > 0; ++i, --room) {
+                quadReturns.add(qs.get(i));
+            }
+        }
+        returnsAvailable = true;
     }
 
     private ArrayList<GrassQuad> quads;
+    // Interleave ranges: range r spans quads [cuts[r], cuts[r+1]) and is
+    // queued as its own draw between two tree segments; the batch is
+    // built and uploaded once, by the first range that renders.
+    private int[] cuts;
+    private int[] segRun;
+    private boolean built;
+    private int baseVert;
+    private int live;
+
+    // Camera snapshot of the capture frame (game thread); every segment
+    // sends it, the values change per frame so a cache would always miss.
+    private float camOffJX;
+    private float camOffJY;
+    private float camJigSqX;
+    private float camJigSqY;
+    private float camCentreX;
+    private float camCentreY;
+    private float camK1;
+    private boolean world;
+
+    public void setFrameCamera(float offJX, float offJY, float jigSqX, float jigSqY,
+            float centreX, float centreY, float k1, boolean worldPath) {
+        camOffJX = offJX;
+        camOffJY = offJY;
+        camJigSqX = jigSqX;
+        camJigSqY = jigSqY;
+        camCentreX = centreX;
+        camCentreY = centreY;
+        camK1 = k1;
+        world = worldPath;
+    }
 
     public void set(ArrayList<GrassQuad> quads) {
+        setSegmented(quads, new int[] {0, quads.size()}, 1);
+    }
+
+    // live = number of ranges that get queued (postRender count).
+    public void setSegmented(ArrayList<GrassQuad> quads, int[] cuts, int live) {
         this.quads = quads;
+        this.cuts = cuts;
+        this.live = live;
+    }
+
+    public TextureDraw.GenericDrawer segment(int range) {
+        return new SegmentDrawer(this, range);
+    }
+
+    private void release() {
+        if (--live > 0) return;
+        ArrayList<GrassQuad> qs = quads;
+        quads = null;
+        cuts = null;
+        segRun = null;
+        built = false;
+        if (qs != null) recycle(qs);
+    }
+
+    private static final class SegmentDrawer extends TextureDraw.GenericDrawer {
+        private final WindSwayGrassDrawer owner;
+        private final int range;
+
+        SegmentDrawer(WindSwayGrassDrawer owner, int range) {
+            this.owner = owner;
+            this.range = range;
+        }
+
+        @Override
+        public void render() {
+            owner.renderSegment(range);
+        }
+
+        @Override
+        public void postRender() {
+            owner.release();
+        }
     }
 
     private static void lookupUniforms() {
@@ -297,6 +525,24 @@ public class WindSwayGrassDrawer extends TextureDraw.GenericDrawer {
         uRing2 = loc(program, "uRing2");
         uPlant = loc(program, "uPlant");
         uPlant2 = loc(program, "uPlant2");
+        uLeafP = loc(program, "uLeafP");
+        uLeafQ = loc(program, "uLeafQ");
+        uTip = loc(program, "uTip");
+        uSheen = loc(program, "uSheen");
+        uModel = loc(program, "uModel");
+        uFlut = loc(program, "uFlut");
+        uHon = loc(program, "uHon");
+        uHon2 = loc(program, "uHon2");
+        uPTurb = loc(program, "uPTurb");
+        uLean = loc(program, "uLean");
+        uCross = loc(program, "uCross");
+        uBody = loc(program, "uBody");
+        uLeafM = loc(program, "uLeafM");
+        uFlick = loc(program, "uFlick");
+        uFlick2 = loc(program, "uFlick2");
+        uLeafM2 = loc(program, "uLeafM2");
+        uCamA = loc(program, "uCamA");
+        uCamB = loc(program, "uCamB");
         uniformsLooked = true;
     }
 
@@ -320,6 +566,13 @@ public class WindSwayGrassDrawer extends TextureDraw.GenericDrawer {
 
     @Override
     public void render() {
+        renderSegment(0);
+    }
+
+    // One interleave range. The first range that renders builds and
+    // uploads the whole batch; every range pays its own state and program
+    // setup (tree segments draw in between and clobber both).
+    void renderSegment(int range) {
         if (state == FAILED) return;
         boolean diag = WindSwayMod.debugLog;
         long t0 = diag ? System.nanoTime() : 0L;
@@ -355,65 +608,13 @@ public class WindSwayGrassDrawer extends TextureDraw.GenericDrawer {
                 return;
             }
             if (this.quads.isEmpty()) return;
-
-            int maxBytes = this.quads.size() * 4 * STRIDE;
-            if (stage.capacity() < maxBytes) {
-                int cap = stage.capacity();
-                while (cap < maxBytes) {
-                    cap *= 2;
-                }
-                stage = BufferUtils.createByteBuffer(cap);
-                stageF = stage.asFloatBuffer();
+            if (!built) {
+                build(diag, t0);
             }
-            stageF.clear();
-            int slots = Math.max(1, Math.min(slotsWanted, maxSlots));
-            DepthAtlas.beginBatch();
-            atlasOn = DepthAtlas.active();
-            releaseRuns();
-            Run cur = null;
-            int vertCount = 0;
-            for (int i = 0; i < this.quads.size(); ++i) {
-                GrassQuad q = this.quads.get(i);
-                if (q.tex == null || q.tex.getTextureId() == null) continue;
-                if (q.depthTex == null || q.depthTex.getTextureId() == null) continue;
-                TextureID diffuse = q.tex.getTextureId();
-                TextureID depth = q.depthTex.getTextureId();
-                DepthAtlas.Cell cell = atlasOn ? DepthAtlas.cellFor(q.depthTex) : null;
-                if (cell != null) {
-                    q.du0 = cell.u0 + q.du0 * cell.su;
-                    q.du1 = cell.u0 + q.du1 * cell.su;
-                    q.dv0 = cell.v0 + q.dv0 * cell.sv;
-                    q.dv1 = cell.v0 + q.dv1 * cell.sv;
-                }
-                int d = cur == null ? -1 : slotOf(cur.diffuse, cur.nDiffuse, diffuse);
-                int z = cur == null ? -1 : cell != null ? 0 : slotOf(cur.depth, cur.nDepth, depth);
-                if (cur == null || (d < 0 && cur.nDiffuse >= slots) || (z < 0 && cur.nDepth >= slots)) {
-                    cur = newRun(vertCount);
-                    d = -1;
-                    z = cell != null ? 0 : -1;
-                }
-                if (d < 0) {
-                    d = cur.nDiffuse;
-                    cur.diffuse[cur.nDiffuse++] = diffuse;
-                }
-                if (z < 0) {
-                    z = cur.nDepth;
-                    cur.depth[cur.nDepth++] = depth;
-                }
-                putQuad(stageF, q, d + MAX_SLOTS * z);
-                cur.count += 4;
-                vertCount += 4;
-            }
-            if (vertCount == 0) return;
-            int bytes = vertCount * STRIDE;
-            stage.position(0);
-            stage.limit(bytes);
-            long tF = 0L;
-            if (diag) {
-                tF = System.nanoTime();
-                cpuFillNs.addAndGet(tF - t0);
-                diagRuns.addAndGet(runs.size());
-            }
+            int runFrom = segRun[range];
+            int runTo = segRun[range + 1];
+            if (runFrom >= runTo) return;
+            long tF = diag ? System.nanoTime() : 0L;
 
             // Scene ortho on the Core stacks is already the right MVP.
             // setDirty before each set: the model pipeline writes depth
@@ -458,29 +659,7 @@ public class WindSwayGrassDrawer extends TextureDraw.GenericDrawer {
                 shader.End();
             }
 
-            if (streamVbo == 0) {
-                streamVbo = GL15.glGenBuffers();
-                GL15.glBindBuffer(GL15.GL_ARRAY_BUFFER, streamVbo);
-                GL15.glBufferData(GL15.GL_ARRAY_BUFFER, streamCapacity, GL15.GL_STREAM_DRAW);
-            } else {
-                GL15.glBindBuffer(GL15.GL_ARRAY_BUFFER, streamVbo);
-            }
-            if (bytes > streamCapacity) {
-                while (streamCapacity < bytes) streamCapacity *= 2;
-                GL15.glBufferData(GL15.GL_ARRAY_BUFFER, streamCapacity, GL15.GL_STREAM_DRAW);
-                streamOffset = 0;
-            } else if (streamOffset + bytes > streamCapacity) {
-                GL15.glBufferData(GL15.GL_ARRAY_BUFFER, streamCapacity, GL15.GL_STREAM_DRAW);
-                streamOffset = 0;
-            }
-            GL15.glBufferSubData(GL15.GL_ARRAY_BUFFER, streamOffset, stage);
-            int baseVert = streamOffset / STRIDE;
-            streamOffset += bytes;
-            long t2 = 0L;
-            if (diag) {
-                t2 = System.nanoTime();
-                cpuUploadNs.addAndGet(t2 - t1);
-            }
+            long t2 = t1;
 
             // The engine never binds a VAO, so ours holds the nine pointers (the
             // stream VBO id survives orphaning) and the default object keeps the ring
@@ -488,18 +667,20 @@ public class WindSwayGrassDrawer extends TextureDraw.GenericDrawer {
             boolean withVao = useVao && vaoOk();
             if (withVao) {
                 if (vao == 0) {
+                    GL15.glBindBuffer(GL15.GL_ARRAY_BUFFER, streamVbo);
                     vao = GL30.glGenVertexArrays();
                     GL30.glBindVertexArray(vao);
                     setAttribPointers();
-                    for (int i = 0; i < 9; ++i) {
+                    for (int i = 0; i < NUM_ATTRIBS; ++i) {
                         GL20.glEnableVertexAttribArray(i);
                     }
                 } else {
                     GL30.glBindVertexArray(vao);
                 }
             } else {
+                GL15.glBindBuffer(GL15.GL_ARRAY_BUFFER, streamVbo);
                 setAttribPointers();
-                for (int i = 0; i < 9; ++i) {
+                for (int i = 0; i < NUM_ATTRIBS; ++i) {
                     GL20.glEnableVertexAttribArray(i);
                 }
             }
@@ -521,14 +702,36 @@ public class WindSwayGrassDrawer extends TextureDraw.GenericDrawer {
             setU(uRing2, 24);
             setU(uPlant, 28);
             setU(uPlant2, 32);
+            setU(uLeafP, 36);
+            setU(uLeafQ, 40);
+            setU(uTip, 44);
+            setU(uSheen, 48);
+            setU(uModel, 52);
+            setU(uFlut, 56);
+            setU(uHon, 60);
+            setU(uHon2, 64);
+            setU(uPTurb, 68);
+            setU(uLean, 72);
+            setU(uCross, 76);
+            setU(uBody, 80);
+            setU(uLeafM, 84);
+            setU(uFlick, 88);
+            setU(uFlick2, 92);
+            setU(uLeafM2, 96);
             uLoaded = true;
+            if (uCamA >= 0) {
+                GL20.glUniform4f(uCamA, camOffJX, camOffJY, camJigSqX, camJigSqY);
+            }
+            if (uCamB >= 0) {
+                GL20.glUniform4f(uCamB, camCentreX, camCentreY, camK1, world ? 1.0f : 0.0f);
+            }
             long t4 = 0L;
             if (diag) {
                 t4 = System.nanoTime();
                 cpuProgNs.addAndGet(t4 - t3);
             }
 
-            drawRuns(baseVert);
+            drawRuns(baseVert, runFrom, runTo);
             long t5 = 0L;
             if (diag) {
                 t5 = System.nanoTime();
@@ -539,7 +742,7 @@ public class WindSwayGrassDrawer extends TextureDraw.GenericDrawer {
             if (withVao) {
                 GL30.glBindVertexArray(0);
             } else {
-                for (int i = 5; i < 9; ++i) {
+                for (int i = 5; i < NUM_ATTRIBS; ++i) {
                     GL20.glDisableVertexAttribArray(i);
                 }
             }
@@ -571,10 +774,19 @@ public class WindSwayGrassDrawer extends TextureDraw.GenericDrawer {
             }
             if (!firstBatchLogged) {
                 firstBatchLogged = true;
-                WindSwayMod.trace("first grass batch rendered (" + this.quads.size() + " quads)");
+                WindSwayMod.trace("first grass batch rendered (" + this.quads.size() + " quads, "
+                        + (world ? "world" : "screen") + " path)");
             }
         } catch (Throwable t) {
             if (timed) gpuTimer.end();
+            // A VAO left bound after a mid-draw throw would swallow the
+            // engine's attrib pointers for the rest of the session.
+            if (vaoSupport == 1) {
+                try {
+                    GL30.glBindVertexArray(0);
+                } catch (Throwable ignored) {
+                }
+            }
             Texture.lastTextureID = -1;
             SpriteRenderer.ringBuffer.restoreVbos = true;
             SpriteRenderer.ringBuffer.restoreBoundTextures = true;
@@ -582,16 +794,113 @@ public class WindSwayGrassDrawer extends TextureDraw.GenericDrawer {
         }
     }
 
+    // Render thread, once per batch: stage fill, the runs (broken at every
+    // cut, so a range is a whole number of runs) and the VBO upload.
+    private void build(boolean diag, long t0) {
+        built = true;
+        int nRanges = cuts.length - 1;
+        segRun = new int[nRanges + 1];
+        int maxBytes = this.quads.size() * 4 * STRIDE;
+        if (stage.capacity() < maxBytes) {
+            int cap = stage.capacity();
+            while (cap < maxBytes) {
+                cap *= 2;
+            }
+            stage = BufferUtils.createByteBuffer(cap);
+            stageF = stage.asFloatBuffer();
+        }
+        stageF.clear();
+        int slots = Math.max(1, Math.min(slotsWanted, maxSlots));
+        DepthAtlas.beginBatch();
+        atlasOn = DepthAtlas.active();
+        releaseRuns();
+        Run cur = null;
+        int vertCount = 0;
+        int range = 0;
+        for (int i = 0; i < this.quads.size(); ++i) {
+            while (range < nRanges - 1 && i >= cuts[range + 1]) {
+                ++range;
+                segRun[range] = runs.size();
+                cur = null;
+            }
+            GrassQuad q = this.quads.get(i);
+            if (q.tex == null || q.tex.getTextureId() == null) continue;
+            if (q.depthTex == null || q.depthTex.getTextureId() == null) continue;
+            TextureID diffuse = q.tex.getTextureId();
+            TextureID depth = q.depthTex.getTextureId();
+            DepthAtlas.Cell cell = atlasOn ? DepthAtlas.cellFor(q.depthTex) : null;
+            if (cell != null) {
+                q.du0 = cell.u0 + q.du0 * cell.su;
+                q.du1 = cell.u0 + q.du1 * cell.su;
+                q.dv0 = cell.v0 + q.dv0 * cell.sv;
+                q.dv1 = cell.v0 + q.dv1 * cell.sv;
+            }
+            int d = cur == null ? -1 : slotOf(cur.diffuse, cur.nDiffuse, diffuse);
+            int z = cur == null ? -1 : cell != null ? 0 : slotOf(cur.depth, cur.nDepth, depth);
+            if (cur == null || (d < 0 && cur.nDiffuse >= slots) || (z < 0 && cur.nDepth >= slots)) {
+                cur = newRun(vertCount);
+                d = -1;
+                z = cell != null ? 0 : -1;
+            }
+            if (d < 0) {
+                d = cur.nDiffuse;
+                cur.diffuse[cur.nDiffuse++] = diffuse;
+            }
+            if (z < 0) {
+                z = cur.nDepth;
+                cur.depth[cur.nDepth++] = depth;
+            }
+            putQuad(stageF, q, d + MAX_SLOTS * z, world);
+            cur.count += 4;
+            vertCount += 4;
+        }
+        for (int r = range + 1; r <= nRanges; ++r) {
+            segRun[r] = runs.size();
+        }
+        if (vertCount == 0) return;
+        int bytes = vertCount * STRIDE;
+        stage.position(0);
+        stage.limit(bytes);
+        long tF = 0L;
+        if (diag) {
+            tF = System.nanoTime();
+            cpuFillNs.addAndGet(tF - t0);
+            diagRuns.addAndGet(runs.size());
+        }
+        if (streamVbo == 0) {
+            streamVbo = GL15.glGenBuffers();
+            GL15.glBindBuffer(GL15.GL_ARRAY_BUFFER, streamVbo);
+            GL15.glBufferData(GL15.GL_ARRAY_BUFFER, streamCapacity, GL15.GL_STREAM_DRAW);
+        } else {
+            GL15.glBindBuffer(GL15.GL_ARRAY_BUFFER, streamVbo);
+        }
+        if (bytes > streamCapacity) {
+            while (streamCapacity < bytes) streamCapacity *= 2;
+            GL15.glBufferData(GL15.GL_ARRAY_BUFFER, streamCapacity, GL15.GL_STREAM_DRAW);
+            streamOffset = 0;
+        } else if (streamOffset + bytes > streamCapacity) {
+            GL15.glBufferData(GL15.GL_ARRAY_BUFFER, streamCapacity, GL15.GL_STREAM_DRAW);
+            streamOffset = 0;
+        }
+        GL15.glBufferSubData(GL15.GL_ARRAY_BUFFER, streamOffset, stage);
+        baseVert = streamOffset / STRIDE;
+        streamOffset += bytes;
+        GL15.glBindBuffer(GL15.GL_ARRAY_BUFFER, 0);
+        if (diag) {
+            cpuUploadNs.addAndGet(System.nanoTime() - tF);
+        }
+    }
+
     // Raw binds like the RingBuffer's texture1 path: TextureID.bind() turns the
     // engine's NEAREST depth maps bilinear for the session (edges leak through
     // walls). Diffuse pages keep the engine's filter state, the shader samples
     // texel centres. Unit cache per batch: vanilla rebinds units 0-2 in between.
-    private static void drawRuns(int baseVert) {
+    private static void drawRuns(int baseVert, int from, int to) {
         for (int u = 0; u < unitBound.length; ++u) {
             unitBound[u] = 0;
         }
         int active = 0;
-        for (int i = 0; i < runs.size(); ++i) {
+        for (int i = from; i < to; ++i) {
             Run r = runs.get(i);
             for (int k = 0; k < r.nDiffuse; ++k) {
                 active = bindUnit(k, r.diffuse[k], active, false);
@@ -614,11 +923,18 @@ public class WindSwayGrassDrawer extends TextureDraw.GenericDrawer {
     // the previous unit behind the cache.
     private static int bindUnit(int unit, TextureID tex, int active, boolean nearest) {
         int id = tex.getID();
-        if (id != -1 && unitBound[unit] == id) return active;
+        if (id != -1 && unitBound[unit] == id) {
+            // Still bound here, but the engine may have bound the same page
+            // elsewhere since and re-applied its own filter.
+            if (!nearest) return active;
+            if (active != unit) GL13.glActiveTexture(GL13.GL_TEXTURE0 + unit);
+            TreeRenderer.nearestAlways();
+            return unit;
+        }
         if (active != unit) GL13.glActiveTexture(GL13.GL_TEXTURE0 + unit);
         if (id == -1) id = TreeRenderer.ensureId(tex);
         GL11.glBindTexture(GL11.GL_TEXTURE_2D, id);
-        if (nearest) TreeRenderer.nearestOnce(tex, id);
+        if (nearest) TreeRenderer.nearestAlways();
         unitBound[unit] = id;
         diagBinds.incrementAndGet();
         return unit;
@@ -635,26 +951,29 @@ public class WindSwayGrassDrawer extends TextureDraw.GenericDrawer {
 
     @Override
     public void postRender() {
-        this.quads = null;
+        release();
     }
 
-    private static void putQuad(FloatBuffer b, GrassQuad q, int slotCode) {
+    private static void putQuad(FloatBuffer b, GrassQuad q, int slotCode, boolean world) {
         // Texture.render(ObjectRenderEffects) corners, order TL/TR/BR/BL; wind
         // flora widened by its reach, uv extended to match.
         float padL = q.padL;
         float padR = q.padR;
+        float padT = q.padT;
         float tU = (q.u1 - q.u0) / q.w;
         float tV = (q.v1 - q.v0) / q.h;
         float tDU = (q.du1 - q.du0) / q.w;
         float tDV = (q.dv1 - q.dv0) / q.h;
         float uL = q.u0 - padL * tU;
         float uR = q.u1 + padR * tU;
+        float vT = q.v0 - padT * tV;
         float duL = q.du0 - padL * tDU;
         float duR = q.du1 + padR * tDU;
+        float dvT = q.dv0 - padT * tDV;
         float xTL = q.ox - padL + q.ox1 * q.w;
-        float yTL = q.oy + q.oy1 * q.h;
+        float yTL = q.oy - padT + q.oy1 * q.h;
         float xTR = q.ox + q.w + padR + q.ox2 * q.w;
-        float yTR = q.oy + q.oy2 * q.h;
+        float yTR = q.oy - padT + q.oy2 * q.h;
         float xBR = q.ox + q.w + padR + q.ox3 * q.w;
         float yBR = q.oy + q.h + q.oy3 * q.h;
         float xBL = q.ox - padL + q.ox4 * q.w;
@@ -663,17 +982,35 @@ public class WindSwayGrassDrawer extends TextureDraw.GenericDrawer {
         float uMax = Math.max(q.u0, q.u1);
         // aFrame.w: seed fraction, barrier bits 2/4, page slot pair above (times 8).
         float frameW = q.windSeed + q.barrier + 8.0f * slotCode;
+        float r1 = q.lit ? q.r1 : q.r;
+        float g1 = q.lit ? q.g1 : q.g;
+        float b1 = q.lit ? q.b1 : q.b;
+        float r2 = q.lit ? q.r2 : q.r;
+        float g2 = q.lit ? q.g2 : q.g;
+        float b2 = q.lit ? q.b2 : q.b;
+        float r3 = q.lit ? q.r3 : q.r;
+        float g3 = q.lit ? q.g3 : q.g;
+        float b3 = q.lit ? q.b3 : q.b;
         float[] o = quad;
-        if (q.lit) {
-            putVertex(o, 0, xTL, yTL, q, q.r, q.g, q.b, uL, q.v0, duL, q.dv0, uMin, uMax, tU, tV, tDU, tDV, frameW);
-            putVertex(o, FLOATS, xTR, yTR, q, q.r1, q.g1, q.b1, uR, q.v0, duR, q.dv0, uMin, uMax, tU, tV, tDU, tDV, frameW);
-            putVertex(o, 2 * FLOATS, xBR, yBR, q, q.r2, q.g2, q.b2, uR, q.v1, duR, q.dv1, uMin, uMax, tU, tV, tDU, tDV, frameW);
-            putVertex(o, 3 * FLOATS, xBL, yBL, q, q.r3, q.g3, q.b3, uL, q.v1, duL, q.dv1, uMin, uMax, tU, tV, tDU, tDV, frameW);
-        } else {
-            putVertex(o, 0, xTL, yTL, q, q.r, q.g, q.b, uL, q.v0, duL, q.dv0, uMin, uMax, tU, tV, tDU, tDV, frameW);
-            putVertex(o, FLOATS, xTR, yTR, q, q.r, q.g, q.b, uR, q.v0, duR, q.dv0, uMin, uMax, tU, tV, tDU, tDV, frameW);
-            putVertex(o, 2 * FLOATS, xBR, yBR, q, q.r, q.g, q.b, uR, q.v1, duR, q.dv1, uMin, uMax, tU, tV, tDU, tDV, frameW);
-            putVertex(o, 3 * FLOATS, xBL, yBL, q, q.r, q.g, q.b, uL, q.v1, duL, q.dv1, uMin, uMax, tU, tV, tDU, tDV, frameW);
+        putVertex(o, 0, xTL, yTL, q, q.r, q.g, q.b, uL, vT, duL, dvT, uMin, uMax, tU, tV, tDU, tDV, frameW);
+        putVertex(o, FLOATS, xTR, yTR, q, r1, g1, b1, uR, vT, duR, dvT, uMin, uMax, tU, tV, tDU, tDV, frameW);
+        putVertex(o, 2 * FLOATS, xBR, yBR, q, r2, g2, b2, uR, q.v1, duR, q.dv1, uMin, uMax, tU, tV, tDU, tDV, frameW);
+        putVertex(o, 3 * FLOATS, xBL, yBL, q, r3, g3, b3, uL, q.v1, duL, q.dv1, uMin, uMax, tU, tV, tDU, tDV, frameW);
+        if (world) {
+            // World lane: aPosition takes the square, aDepthFar the depth
+            // shift, aClass5.zw the corner's pixel offset from the anchor
+            // (exact float split, the shader rebuilds the corner bit for bit).
+            for (int c = 0; c < 4; ++c) {
+                int at = c * FLOATS;
+                float px = o[at];
+                float py = o[at + 1];
+                o[at] = q.sqX;
+                o[at + 1] = q.sqY;
+                o[at + 2] = q.sqZ;
+                o[at + 11] = q.depthShift;
+                o[at + 46] = px - q.anchorX;
+                o[at + 47] = py - q.anchorY;
+            }
         }
         b.put(o);
     }
@@ -710,5 +1047,25 @@ public class WindSwayGrassDrawer extends TextureDraw.GenericDrawer {
         o[i + 25] = q.frameBottom;
         o[i + 26] = q.frameLeft;
         o[i + 27] = frameW;
+        o[i + 28] = q.leafX;
+        o[i + 29] = q.leafY;
+        o[i + 30] = q.leafCell;
+        o[i + 31] = q.leafRate;
+        o[i + 32] = q.bendPow;
+        o[i + 33] = q.bladeVar;
+        o[i + 34] = q.tipF;
+        o[i + 35] = q.sheenF;
+        o[i + 36] = q.dampF;
+        o[i + 37] = q.flutF;
+        o[i + 38] = q.windT;
+        o[i + 39] = q.steadyF;
+        o[i + 40] = q.block;
+        o[i + 41] = q.swingF;
+        o[i + 42] = q.inertiaF;
+        o[i + 43] = q.lobePx;
+        o[i + 44] = q.flickPx;
+        o[i + 45] = q.maskF;
+        o[i + 46] = 0.0f;
+        o[i + 47] = 0.0f;
     }
 }

@@ -56,29 +56,77 @@ enableOpt.onChangeApply = function(self, value)
     applyToJava("setEnabled", value)
 end
 
-modOptions:addDescription("Sway in still air. Stronger weather shows as it is.")
+-- Preset bands from the wind study (vanilla median 0.12, 74 % below
+-- 0.2); Custom = the two sliders. Index order matches addItem below.
+local presetBands = {
+    { 0.0, 0.0 },   -- Vanilla
+    { 0.15, 0.3 },  -- Calm
+    { 0.2, 0.4 },   -- Normal
+    { 0.3, 0.55 },  -- Windy
+}
+
+local windPresetOpt, windFloorOpt, windCeilOpt
+
+local function applyBand()
+    local band = presetBands[windPresetOpt:getValue()]
+    local lo = band and band[1] or windFloorOpt:getValue()
+    local hi = band and band[2] or windCeilOpt:getValue()
+    applyToJava("setWindFloor", lo)
+    applyToJava("setTreeWindFloor", lo)
+    applyToJava("setWindCeil", hi)
+end
+
+windPresetOpt = modOptions:addComboBox(
+    "windPreset",
+    "Wind",
+    "The mod's own wind while the game's weather is idle. Vanilla = the game's wind only. Custom uses the two sliders below.")
+windPresetOpt:addItem("Vanilla")
+windPresetOpt:addItem("Calm")
+windPresetOpt:addItem("Normal")
+windPresetOpt:addItem("Windy", true)
+windPresetOpt:addItem("Custom")
+windPresetOpt.onChangeApply = function(self, selected)
+    applyBand()
+end
 
 -- No custom slider-label formatter (the setName shim is unreliable);
 -- the scale hint lives in the description.
--- Renamed keys: saved values of the old additive floor must not carry over.
-local windFloorOpt = modOptions:addSlider(
-    "plantBaseline",
-    "Minimum sway (plants)",
-    0.0, 0.5, 0.05,
+windFloorOpt = modOptions:addSlider(
+    "baseline",
+    "Minimum wind (custom)",
+    0.0, 1.0, 0.05,
     0.2,
-    "0 = vanilla wind only.")
+    "Only with Custom. Both sliders 0 = vanilla wind.")
 windFloorOpt.onChangeApply = function(self, value)
-    applyToJava("setWindFloor", value)
+    applyBand()
 end
 
-local treeWindFloorOpt = modOptions:addSlider(
-    "treeBaseline",
-    "Minimum sway (trees)",
-    0.0, 0.5, 0.05,
-    0.2,
-    "0 = vanilla wind only.")
-treeWindFloorOpt.onChangeApply = function(self, value)
-    applyToJava("setTreeWindFloor", value)
+windCeilOpt = modOptions:addSlider(
+    "baselineMax",
+    "Maximum wind (custom)",
+    0.0, 1.0, 0.05,
+    0.85,
+    "Only with Custom. At or below the minimum: a steady wind at the minimum.")
+windCeilOpt.onChangeApply = function(self, value)
+    applyBand()
+end
+
+local weatherTakeoverOpt = modOptions:addTickBox(
+    "weatherTakeover",
+    "Weather overrides the wind setup",
+    true,
+    "During rain, fog and storms the game's wind rules, even below your wind band. Off: the band stays as a floor, weather only shows above it. No effect on Vanilla.")
+weatherTakeoverOpt.onChangeApply = function(self, value)
+    applyToJava("setWeatherTakeover", value)
+end
+
+local windSoundOpt = modOptions:addTickBox(
+    "windSound",
+    "Wind sound",
+    true,
+    "The wind ambience follows the mod's wind. Sound only, gameplay untouched.")
+windSoundOpt.onChangeApply = function(self, value)
+    applyToJava("setWindSound", value)
 end
 
 -- Combo index 1..3 -> Java level 2..0.
@@ -99,8 +147,9 @@ end
 local function syncToJava()
     PZAPI.ModOptions:load()
     applyToJava("setEnabled", enableOpt:getValue())
-    applyToJava("setWindFloor", windFloorOpt:getValue())
-    applyToJava("setTreeWindFloor", treeWindFloorOpt:getValue())
+    applyBand()
+    applyToJava("setWeatherTakeover", weatherTakeoverOpt:getValue())
+    applyToJava("setWindSound", windSoundOpt:getValue())
     applyToJava("setTreeDetail", treeDetailLevels[treeDetailOpt:getValue()] or 2)
     if WindSway.javaReady and ModJava.warmUp then
         pcall(ModJava.warmUp)
@@ -111,6 +160,9 @@ Events.OnGameBoot.Add(syncToJava)
 
 WindSway.syncToJava = syncToJava
 WindSway.enableOpt = enableOpt
+WindSway.windPresetOpt = windPresetOpt
 WindSway.windFloorOpt = windFloorOpt
-WindSway.treeWindFloorOpt = treeWindFloorOpt
+WindSway.windCeilOpt = windCeilOpt
+WindSway.weatherTakeoverOpt = weatherTakeoverOpt
+WindSway.windSoundOpt = windSoundOpt
 WindSway.treeDetailOpt = treeDetailOpt

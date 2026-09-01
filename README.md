@@ -4,11 +4,11 @@ Trees, grass and bushes sway with the wind, from light breeze to storm.
 
 I built this for immersion: in vanilla the vegetation stands still most of the time, and the optional "Wind Sprite Effects" only shear sprites between random poses. Wind Sway replaces the animation and the renderer:
 
-- **Trees bend** from the trunk up. Leaves flutter, broad crowns move as a block, evergreens as a stiff cone. Scaled to tree size, jumbos included.
+- **Trees move by species**: hollies bounce their tiers, dogwood stirs in layers, maples carry a dense crown. Leaves flutter, scaled to tree size, jumbos included.
 - **Wind has a direction and gusts**: crowns lean with the rain, gusts roll through the forest, storms bend crowns over and hold them.
-- **Sway in still air**: two sliders, plants and trees, set the baseline. Stronger weather shows as it is, 0 = vanilla wind only.
-- **Every plant moves**: bushes and all wind plants, stiffer ones a little less.
-- **Render-only**: water, sounds and aiming stay on the real weather.
+- **Every plant moves by class**: bushes bend as stem and crown by species, ferns bob their fronds, dead crops sway as dry stems, flower spikes nod.
+- **Pick your wind**: Calm, Normal, Windy or a custom band. The mod plays its own wandering wind while the game's weather is idle; rain, fog and storms take over. Vanilla = the game's wind only.
+- **Render-only**: water, rain and aiming stay on the real weather.
 - **Own renderer**: grass and trees drawn in batches instead of one draw call per sprite.
 
 Options → Mods → Wind Sway, no other setup: the mod turns the game's wind effects on by itself and ignores the vanilla "Wind Sprite Effects" option while it runs. Turn the mod off and your vanilla setting applies again.
@@ -55,12 +55,15 @@ Everything sits under Options → Mods → Wind Sway.
 
 <img src="screenshots/settings.png" alt="Mod options panel">
 
-| Setting | Range / Default | What it does |
+| Setting | Default | What it does |
 |---|---|---|
-| Enable Wind Sway | on | Master switch: turns on the game's wind effects and draws swaying vegetation with the mod's own renderer. Off = back to your vanilla settings. |
-| Minimum sway (plants) | 0–0.5, default 0.2 | Sway in still air. Stronger weather shows as it is. 0 = vanilla wind only. |
-| Minimum sway (trees) | 0–0.5, default 0.2 | Same for tree crowns. 0 = vanilla wind only. |
-| Tree detail | High / Medium / Low, default High | Lower levels drop the fine branch and leaf motion, the crown still bends. For weaker GPUs. |
+| Enable Wind Sway | on | Master switch: turns on the game's wind path and draws swaying vegetation with the mod's own renderer. Off = back to your vanilla settings. |
+| Wind | Windy | The mod's own wind while the game's weather is idle: Vanilla (game wind only), Calm, Normal, Windy, or Custom. |
+| Minimum wind (custom) | 0–1, 0.2 | Lower edge of the custom band. Both sliders 0 = vanilla wind. |
+| Maximum wind (custom) | 0–1, 0.85 | Upper edge. At or below the minimum: a steady wind at the minimum. |
+| Weather overrides the wind setup | on | During rain, fog and storms the game's wind rules, even below the band. Off: the band stays as a floor. |
+| Wind sound | on | The wind ambience follows the mod's wind. Sound only, gameplay untouched. |
+| Tree detail | High | Lower levels drop the fine branch and leaf motion, the crown still bends. |
 
 ## FAQ
 

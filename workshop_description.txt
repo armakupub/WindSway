@@ -5,12 +5,13 @@ Trees, grass and bushes sway with the wind, from light breeze to storm.
 I built this for immersion: in vanilla the vegetation stands still most of the time, and the optional "Wind Sprite Effects" only shear sprites between random poses. Wind Sway replaces the animation and the renderer:
 
 [list]
-[*][b]Trees bend[/b] from the trunk up. Leaves flutter, broad crowns move as a block, evergreens as a stiff cone. Scaled to tree size, jumbos included.
+[*][b]Trees move by species[/b]: hollies bounce their tiers, dogwood stirs in layers, maples carry a dense crown. Leaves flutter, scaled to tree size, jumbos included.
 [*][b]Wind has a direction and gusts[/b]: crowns lean with the rain, gusts roll through the forest, storms bend crowns over and hold them.
-[*][b]Sway in still air[/b]: two sliders, plants and trees, set the baseline. Stronger weather shows as it is, 0 = vanilla wind only.
+[*][b]Every plant moves by class[/b]: bushes bend as stem and crown by species, ferns bob their fronds, dead crops sway as dry stems, flower spikes nod.
+[*][b]Pick your wind[/b]: Calm, Normal, Windy or a custom band. The mod plays its own wandering wind while the game's weather is idle; rain, fog and storms take over. Vanilla = the game's wind only.
+[*][b]Wind sound[/b]: the ambience follows the mod's wind. Sound only, gameplay untouched.
 [*][b]Tree detail[/b]: High, Medium or Low; lower levels drop the fine branch and leaf motion for weaker GPUs.
-[*][b]Every plant moves[/b]: bushes and all wind plants, stiffer ones a little less.
-[*][b]Render-only[/b]: water, sounds and aiming stay on the real weather.
+[*][b]Render-only[/b]: water, rain and aiming stay on the real weather.
 [*][b]Own renderer[/b]: grass and trees drawn in batches instead of one draw call per sprite.
 [/list]
 

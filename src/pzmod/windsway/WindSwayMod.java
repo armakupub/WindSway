@@ -2,72 +2,27 @@ package pzmod.windsway;
 
 import java.lang.reflect.Field;
 import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.HashSet;
-import java.util.Map;
 
 import me.zed_0xff.zombie_buddy.Accessor;
 import me.zed_0xff.zombie_buddy.Exposer;
 
 import org.lwjgl.opengl.GL11;
 
-import zombie.GameTime;
 import zombie.config.BooleanConfigOption;
 import zombie.core.Core;
 import zombie.core.SpriteRenderer;
-import zombie.core.math.PZMath;
-import zombie.core.opengl.RenderSettings;
-import zombie.core.opengl.Shader;
 import zombie.core.opengl.ShaderProgram;
+import zombie.core.textures.Texture;
 import zombie.debug.DebugType;
 import zombie.debug.LogSeverity;
-import zombie.core.textures.ColorInfo;
-import zombie.core.textures.Texture;
-import zombie.iso.IsoCamera;
-import zombie.iso.IsoDepthHelper;
-import zombie.iso.IsoDirections;
-import zombie.iso.IsoGridSquare;
 import zombie.iso.IsoObject;
-import zombie.iso.IsoUtils;
 import zombie.iso.IsoWorld;
-import zombie.characters.IsoGameCharacter;
-import zombie.iso.PlayerCamera;
-import zombie.iso.SpriteDetails.IsoFlagType;
-import zombie.iso.SpriteDetails.IsoObjectType;
-import zombie.characters.IsoPlayer;
-import zombie.core.Color;
-import java.util.function.Consumer;
-import zombie.iso.fboRenderChunk.FBORenderCell;
-import zombie.iso.fboRenderChunk.FBORenderCutaways;
-import zombie.iso.fboRenderChunk.FBORenderTrees;
 import zombie.iso.fboRenderChunk.FBORenderChunk;
-import zombie.iso.fboRenderChunk.FBORenderObjectHighlight;
-import zombie.iso.fboRenderChunk.FBORenderObjectOutline;
-import zombie.iso.fboRenderChunk.ObjectRenderInfo;
-import zombie.iso.objects.IsoBarbecue;
-import zombie.iso.objects.IsoCarBatteryCharger;
-import zombie.iso.objects.IsoCurtain;
-import zombie.iso.objects.IsoDoor;
-import zombie.iso.objects.IsoWindow;
-import zombie.iso.objects.IsoWindowFrame;
-import zombie.iso.objects.IsoFire;
-import zombie.iso.objects.IsoFireplace;
-import zombie.iso.objects.IsoMolotovCocktail;
-import zombie.iso.objects.IsoThumpable;
-import zombie.iso.objects.IsoTrap;
 import zombie.iso.objects.IsoTree;
-import zombie.iso.objects.IsoWorldInventoryObject;
-import zombie.iso.objects.IsoZombieGiblets;
 import zombie.iso.objects.ObjectRenderEffects;
 import zombie.iso.objects.RenderEffectType;
 import zombie.iso.sprite.IsoSprite;
-import zombie.iso.sprite.IsoSpriteInstance;
 import zombie.iso.weather.ClimateManager;
-import zombie.iso.weather.fx.WeatherFxMask;
-import zombie.popman.ObjectPool;
-import zombie.tileDepth.TileDepthMapManager;
-import zombie.tileDepth.TileDepthTexture;
-import zombie.tileDepth.TileDepthTextureManager;
 
 // Kahlua global "WindSwayMod" (simple class name); console calls need
 // the prefix.
@@ -100,19 +55,65 @@ public class WindSwayMod {
         }
     }
 
-    // The two option sliders: remap bases for the plant channel
+    // The baseline slider: one remap base for the plant channel
     // (getWindTickFinal, Patch_ClimateManager) and the tree channel
     // (TreeSway). Vanilla wind sits near zero for hours on calm days.
-    public static volatile double windFloor = 0.2;
+    public static volatile double windFloor = 0.3;
 
     public static void setWindFloor(double v) {
         windFloor = v;
     }
 
-    public static volatile double treeWindFloor = 0.2;
+    public static volatile double treeWindFloor = 0.3;
 
     public static void setTreeWindFloor(double v) {
         treeWindFloor = v;
+    }
+
+    // Upper bound of the calm-wind band, shared by both channels.
+    public static volatile double windCeil = 0.55;
+
+    public static void setWindCeil(double v) {
+        windCeil = v;
+    }
+
+    // This tick's wandering breeze (TreeSway), -1 before the first world
+    // tick; the patches and the rustle path fall back to the sliders.
+    public static volatile double breezeTree = -1.0;
+    public static volatile double breezePlant = -1.0;
+
+    public static double breezeTreeFloor() {
+        double b = breezeTree;
+        return b >= 0.0 ? b : treeWindFloor;
+    }
+
+    public static double breezePlantFloor() {
+        double b = breezePlant;
+        return b >= 0.0 ? b : windFloor;
+    }
+
+    // The wind ambience follows the raised wind (Patch_ParameterWindIntensity).
+    public static volatile boolean windSound = true;
+
+    public static void setWindSound(boolean v) {
+        windSound = v;
+    }
+
+    public static void setWeatherTakeover(boolean v) {
+        TreeSway.weatherTakeover = v;
+    }
+
+    public static void setWeatherBlend(double seconds) {
+        TreeSway.weatherBlend = seconds;
+    }
+
+    // Any active weather: a running weather period, precipitation or fog.
+    static boolean weatherActive() {
+        ClimateManager cm = ClimateManager.getInstance();
+        if (cm == null) return false;
+        return cm.getWeatherPeriod().isRunning()
+                || cm.getPrecipitationIntensity() > 0.01f
+                || cm.getFogIntensity() > 0.15f;
     }
 
     // Console tuning hooks.
@@ -270,6 +271,12 @@ public class WindSwayMod {
         TreeRenderer.crownTilt = tilt;
     }
 
+    public static void setTreeTrunkLean(double calm, double storm, double foot) {
+        TreeRenderer.trunkLeanCalm = calm;
+        TreeRenderer.trunkLeanStorm = storm;
+        TreeRenderer.trunkFoot = foot;
+    }
+
     public static void setTreeLeanMean(double meanPerWind) {
         TreeSway.meanLean = meanPerWind;
     }
@@ -312,9 +319,210 @@ public class WindSwayMod {
         TreeSway.plantBarrierCap = capPx;
     }
 
+    public static void setPlantCap(double knee) {
+        TreeSway.plantCapKnee = knee;
+    }
+
     public static void setPlantGate(double start, double slope) {
         TreeSway.plantGateStart = Math.max(0.0, Math.min(1.0, start));
         TreeSway.plantGateSlope = Math.max(0.0, Math.min(1.0, slope));
+    }
+
+    // Plant classes: 0 blades, 1 leafy, 2 rosette, 3 twig, 4 crown, 5 stalk,
+    // 6 flower, 7 sparse.
+    public static void setPlantClass(int cls, double lean, double period, double bendPow, double bladeVar,
+                                     double leafAmp, double leafX, double leafY, double leafCellPx, double leafRate) {
+        PlantClass.set(cls, lean, period, bendPow, bladeVar, leafAmp, leafX, leafY, leafCellPx, leafRate);
+    }
+
+    public static void setPlantLeaf(double ampPx, double ampStormPx, double refPx, double sizePow) {
+        TreeSway.plantLeafAmp = ampPx;
+        TreeSway.plantLeafAmpStorm = ampStormPx;
+        TreeSway.plantLeafRefPx = Math.max(1.0, refPx);
+        TreeSway.plantLeafSizePow = sizePow;
+    }
+
+    public static void setPlantLeafLook(double density, double gustBase, double rateSpread, double shade) {
+        TreeSway.plantLeafDens = Math.max(0.0, Math.min(1.0, density));
+        TreeSway.plantLeafGust = Math.max(0.0, Math.min(1.0, gustBase));
+        TreeSway.plantLeafRateSpread = Math.max(0.0, Math.min(0.5, rateSpread));
+        TreeSway.plantLeafShade = shade;
+    }
+
+    public static void setPlantPeriodHeight(double refUnits, double pow) {
+        TreeSway.plantPeriodRefH = Math.max(0.05, refUnits);
+        TreeSway.plantPeriodExp = pow;
+    }
+
+    public static void setPlantTip(double lead, double leadPow, double fast, double flick) {
+        TreeSway.plantTipLead = lead;
+        TreeSway.plantTipLeadPow = leadPow;
+        TreeSway.plantTipFast = fast;
+        TreeSway.plantTipFlick = flick;
+    }
+
+    public static void setPlantSheen(double calm, double storm, double heightPow) {
+        TreeSway.plantSheenCalm = calm;
+        TreeSway.plantSheenStorm = storm;
+        TreeSway.plantSheenPow = heightPow;
+    }
+
+    public static void setPlantClassTip(int cls, double tip, double sheen) {
+        PlantClass.setTip(cls, tip, sheen);
+    }
+
+    public static void setPlantClassBody(int cls, double block, double swing, double inertia, double lobe) {
+        PlantClass.setBody(cls, block, swing, inertia, lobe);
+    }
+
+    public static void setPlantClassLeafLook(int cls, double clusterPx, double flick, double mask) {
+        PlantClass.setLeafLook(cls, clusterPx, flick, mask);
+    }
+
+    public static void setPlantClassSteady(int cls, double steady) {
+        PlantClass.setSteady(cls, steady);
+    }
+
+    public static void setBushGenus(int genus, double lean, double period, double swing, double steady,
+            double leafAmp, double leafCell, double flick, double mask, double block, double bendPow) {
+        BushGenus.set(genus, lean, period, swing, steady, leafAmp, leafCell, flick, mask, block, bendPow);
+    }
+
+    public static void setPlantSteadyRamp(double lo, double hi) {
+        TreeSway.plantSteadyRampLo = Math.max(0.0, lo);
+        TreeSway.plantSteadyRampHi = Math.max(lo + 0.001, hi);
+    }
+
+    public static void setPlantContrast(double calm, double storm) {
+        TreeSway.plantContrastCalm = Math.max(0.0, calm);
+        TreeSway.plantContrastStorm = Math.max(0.0, storm);
+    }
+
+    public static void setBreeze(double period, double periodFine, double fineWeight) {
+        TreeSway.breezePeriod = Math.max(1.0, period);
+        TreeSway.breezePeriodFine = Math.max(1.0, periodFine);
+        TreeSway.breezeFineWeight = Math.max(0.0, Math.min(1.0, fineWeight));
+    }
+
+    public static void setPlantLeafOnset(double onset, double full, double clusterRatePow) {
+        TreeSway.plantLeafOnset = Math.max(0.0, onset);
+        TreeSway.plantLeafFull = Math.max(onset + 0.001, full);
+        TreeSway.plantClusterRatePow = clusterRatePow;
+    }
+
+    public static void setPlantMask(double strength, double cellPx, double floor, double gustDens) {
+        TreeSway.plantMaskStrength = strength;
+        TreeSway.plantMaskCell = cellPx;
+        TreeSway.plantMaskFloor = floor;
+        TreeSway.plantMaskGustDens = gustDens;
+    }
+
+    public static void setPlantFlicker(double ampCalm, double ampStorm, double rate, double duty, double cellPx) {
+        TreeSway.plantFlickAmp = ampCalm;
+        TreeSway.plantFlickAmpStorm = ampStorm;
+        TreeSway.plantFlickRate = rate;
+        TreeSway.plantFlickDuty = duty;
+        TreeSway.plantFlickCell = cellPx;
+    }
+
+    public static void setPlantFlickerDensity(double calm, double storm, double windOnset, double gust,
+                                              double gustOnset, double gustFull, double outside) {
+        TreeSway.plantFlickDensCalm = calm;
+        TreeSway.plantFlickDensStorm = storm;
+        TreeSway.plantFlickWindOnset = windOnset;
+        TreeSway.plantFlickDensGust = gust;
+        TreeSway.plantFlickGustOnset = gustOnset;
+        TreeSway.plantFlickGustFull = gustFull;
+        TreeSway.plantFlickOutside = outside;
+    }
+
+    public static void setPlantSnow(double lean, double leaf, double steady) {
+        TreeSway.plantSnowLean = Math.max(0.0, lean);
+        TreeSway.plantSnowLeaf = Math.max(0.0, leaf);
+        TreeSway.plantSnowSteady = Math.max(0.0, Math.min(1.0, steady));
+    }
+
+    public static void setPlantBlock(double knee, double tail) {
+        TreeSway.plantBlockKnee = knee;
+        TreeSway.plantBlockTail = tail;
+    }
+
+    public static void setPlantLobe(double calmPx, double stormPx, double cellPx, double yShare, double onset, double full) {
+        TreeSway.plantLobeCalm = Math.max(0.0, calmPx);
+        TreeSway.plantLobeStorm = Math.max(0.0, stormPx);
+        TreeSway.plantLobeCell = Math.max(2.0, cellPx);
+        TreeSway.plantLobeY = Math.max(0.0, yShare);
+        TreeSway.plantLobeOnset = Math.max(0.0, Math.min(1.0, onset));
+        TreeSway.plantLobeFull = Math.max(TreeSway.plantLobeOnset + 0.01, Math.min(1.0, full));
+    }
+
+    // 1 = ring model, 0 = the standing sine with the energy envelope.
+    public static void setPlantModel(int model) {
+        TreeSway.plantModel = model == 0 ? 0 : 1;
+    }
+
+    public static void setPlantDamping(double zeta, double gain, double gateRate, double stormFade) {
+        TreeSway.plantDamping = zeta;
+        TreeSway.plantRingGain = gain;
+        TreeSway.plantRingGate = gateRate;
+        TreeSway.plantRingStormFade = stormFade;
+    }
+
+    public static void setPlantPeriodSpread(double spread) {
+        TreeSway.plantPeriodSpread = spread;
+    }
+
+    public static void setPlantBendStorm(double addPow) {
+        TreeSway.plantBendPowStorm = addPow;
+    }
+
+    public static void setPlantFlutter(double ampPx, double onset, double rateMul, double phaseSpread) {
+        TreeSway.plantFlutterAmp = ampPx;
+        TreeSway.plantFlutterOnset = onset;
+        TreeSway.plantFlutterRate = rateMul;
+        TreeSway.plantFlutterSpread = phaseSpread;
+    }
+
+    public static void setPlantHonami(double lenTiles, double speedFactor, double weight) {
+        TreeSway.honamiLen = lenTiles;
+        TreeSway.honamiSpeed = speedFactor;
+        TreeSway.honamiMix = weight;
+    }
+
+    public static void setPlantTurbulence(double lengthTiles1, double lengthTiles2) {
+        TreeSway.plantTurbLen1 = lengthTiles1;
+        TreeSway.plantTurbLen2 = lengthTiles2;
+    }
+
+    public static void setPlantSwing(double gainF, double rateF, double stormFade) {
+        TreeSway.plantSwingGain = gainF;
+        TreeSway.plantSwingRate = rateF;
+        TreeSway.plantRingStormFade = stormFade;
+    }
+
+    public static void setPlantLeanInertia(double lagSeconds, double share) {
+        TreeSway.plantLeanLag = lagSeconds;
+        TreeSway.plantLeanShare = share;
+    }
+
+    public static void setPlantCalm(double frontCalm, double localRate, double frontStorm) {
+        TreeSway.plantFrontCalm = frontCalm;
+        TreeSway.plantLocalRate = localRate;
+        TreeSway.plantFrontStorm = frontStorm;
+    }
+
+    public static void setPlantCross(double lenTiles, double weight, double driftRate, double localRateStorm) {
+        TreeSway.plantCrossLen = lenTiles;
+        TreeSway.plantCrossMix = weight;
+        TreeSway.plantCrossRate = driftRate;
+        TreeSway.plantLocalRateStorm = localRateStorm;
+    }
+
+    public static void setPlantDry(double period, double lean, double damping, double flutter) {
+        TreeSway.dryPeriod = period;
+        TreeSway.dryLean = lean;
+        TreeSway.dryDamping = damping;
+        TreeSway.dryFlutter = flutter;
     }
 
     public static void setTreeStormSway(double onset, double gain, double hold) {
@@ -346,10 +554,11 @@ public class WindSwayMod {
         TreeSway.storm = v;
     }
 
-    public static void setTreeGiant(double boost, double onset, double full) {
+    public static void setTreeGiant(double boost, double onset, double full, double fade) {
         TreeRenderer.giantBoost = boost;
         TreeRenderer.giantOnset = onset;
         TreeRenderer.giantFull = full;
+        TreeRenderer.giantFade = fade;
     }
 
     public static void setTreeConifer(double leafAmp, double leafHz, double lobeAmp, double leafAmpStorm, double leafHzStorm) {
@@ -389,6 +598,106 @@ public class WindSwayMod {
         TreeRenderer.bareBendPow = bendPow;
         TreeRenderer.bareLobe = lobeFactor;
         TreeRenderer.bareCell = cellFactor;
+    }
+
+    public static void setTreeWoodLobes(double v) {
+        TreeRenderer.woodLobe = v;
+    }
+
+    public static void setTreeWoodMask(double v) {
+        TreeRenderer.woodMask = v < 0.0 ? 0.0 : v > 1.0 ? 1.0 : v;
+    }
+
+    public static void setTreeDebug(double mode) {
+        TreeRenderer.debugMode = mode;
+    }
+
+    public static void setTreeSeason(double bloomLeaf, double barePeriod, double bareRing) {
+        TreeRenderer.bloomLeaf = bloomLeaf;
+        TreeRenderer.barePeriod = barePeriod;
+        TreeRenderer.bareRing = bareRing;
+    }
+
+    public static void setTreeSparse(double leafAmp, double leafRate, double flick, double denseAt, double fullAt) {
+        TreeRenderer.sparseLeafAmp = leafAmp;
+        TreeRenderer.sparseLeafRate = leafRate;
+        TreeRenderer.sparseFlick = flick;
+        TreeRenderer.sparseDense = denseAt;
+        TreeRenderer.sparseFull = fullAt;
+    }
+
+    public static void setTreePeriodHeight(double refH) {
+        TreeSway.periodRefH = refH;
+    }
+
+    // 0 cone (holly), 1 pendulous (hemlock), 2 pine, 3 fine (birch, redbud,
+    // silverbell), 4 dense (maple, linden, yellowwood), 5 understory
+    // (hawthorn, dogwood).
+    public static void setTreeClass(int cls, double lean, double period, double periodExp, double ring, double lobe,
+                                    double lobeCell, double lobeY, double leafAmp, double leafRate) {
+        TreeClass.set(cls, lean, period, periodExp, ring, lobe, lobeCell, lobeY, leafAmp, leafRate);
+    }
+
+    // NatureTrees order: 0 holly, 1 hemlock, 2 pine, 3 birch, 4 hawthorn,
+    // 5 dogwood, 6 silverbell, 7 yellowwood, 8 redbud, 9 maple, 10 linden.
+    public static void setTreeSpecies(int species, double leafAmp, double leafRate, double leafCm, double flick,
+                                      double paintPx) {
+        TreeSpecies.set(species, leafAmp, leafRate, leafCm, flick, paintPx);
+    }
+
+    public static void setTreeSpeciesLobes(int species, double lobe, double lobeCell) {
+        TreeSpecies.setLobes(species, lobe, lobeCell);
+    }
+
+    // Family order: regular, JUMBO, XL, XXL.
+    public static void setTreePaintFamily(double regular, double jumbo, double xl, double xxl) {
+        TreeRenderer.paintFamily[0] = regular;
+        TreeRenderer.paintFamily[1] = jumbo;
+        TreeRenderer.paintFamily[2] = xl;
+        TreeRenderer.paintFamily[3] = xxl;
+    }
+
+    public static void setTreeCluster(double px, double paintLo, double paintHi, double ampPow, double ratePow,
+                                      double snap) {
+        TreeRenderer.clusterPx = px;
+        TreeRenderer.clusterPaintLo = paintLo;
+        TreeRenderer.clusterPaintHi = paintHi;
+        TreeRenderer.clusterAmpPow = ampPow;
+        TreeRenderer.clusterRatePow = ratePow;
+        TreeRenderer.clusterSnap = snap;
+    }
+
+    public static void setTreeFlicker(double ampCalm, double ampStorm, double rate, double duty) {
+        TreeRenderer.flickAmp = ampCalm;
+        TreeRenderer.flickAmpStorm = ampStorm;
+        TreeRenderer.flickRate = rate;
+        TreeRenderer.flickDuty = duty;
+    }
+
+    public static void setTreeFlickerDensity(double calm, double storm, double windOnset, double gust, double gustOnset,
+                                             double gustFull, double outsidePatches) {
+        TreeRenderer.flickDensCalm = calm;
+        TreeRenderer.flickDensStorm = storm;
+        TreeRenderer.flickWindOnset = windOnset;
+        TreeRenderer.flickDensGust = gust;
+        TreeRenderer.flickGustOnset = gustOnset;
+        TreeRenderer.flickGustFull = gustFull;
+        TreeRenderer.flickOutside = outsidePatches;
+    }
+
+    public static void setTreeFlickerCell(double minPx, double r50Factor) {
+        TreeRenderer.flickCellMin = minPx;
+        TreeRenderer.flickCellK = r50Factor;
+    }
+
+    public static void setTreeTwig(double scale, double rate, double amp) {
+        TreeRenderer.twigScale = scale;
+        TreeRenderer.twigRate = rate;
+        TreeRenderer.twigAmp = amp;
+    }
+
+    public static void setTreeLeafCellMin(double px) {
+        TreeRenderer.leafCellMin = px;
     }
 
     public static void setTreeJitter(double v) {
@@ -483,8 +792,8 @@ public class WindSwayMod {
                 rrField = rr;
             }
             double raw = rawWindTick();
-            double tf = treeWindFloor;
-            double pf = windFloor;
+            double tf = breezeTreeFloor();
+            double pf = breezePlantFloor();
             double treeCh = Math.max(tf, raw);
             double plantCh = Math.max(pf, raw);
             double gT = rustleGain(Math.max(0.0, Math.min(1.0, (treeCh - 0.08) / 0.92)));
@@ -634,6 +943,16 @@ public class WindSwayMod {
         WindSwayGrassDrawer.debugFail = v;
     }
 
+    // World-space vertex lane: the vertex shader projects square + pixel
+    // offset and computes the depth from camera uniforms; the capture skips
+    // the per-object depth math. Off = the screen-space lane, for the pixel
+    // A/B and as fallback.
+    public static volatile boolean grassWorldPath = true;
+
+    public static void setGrassWorldPath(boolean v) {
+        grassWorldPath = v;
+    }
+
     // Arms every latch again. Called per new world and from the console.
     public static void rearm() {
         WindSwayGrassDrawer.rearm();
@@ -642,8 +961,7 @@ public class WindSwayMod {
         DepthAtlas.rearm();
         rustleOk = true;
         treeOreScaleOk = true;
-        mergeOk = true;
-        treePoolOk = true;
+        BatchSequencer.rearm();
     }
 
     private static IsoWorld lastWorld;
@@ -689,6 +1007,10 @@ public class WindSwayMod {
         WindSwayGrassDrawer.useVao = v;
     }
 
+    public static void setTreeVao(boolean v) {
+        TreeRenderer.useVao = v;
+    }
+
     public static void setGrassSlots(int n) {
         WindSwayGrassDrawer.slotsWanted = Math.max(1, Math.min(WindSwayGrassDrawer.MAX_SLOTS, n));
     }
@@ -707,1373 +1029,21 @@ public class WindSwayMod {
     }
 
     private static volatile boolean enqueueFailedLogged = false;
-    private static volatile boolean captureFailedLogged = false;
-    private static volatile boolean firstCaptureLogged = false;
-
-    // Game-thread only. Drained mid-pass (onVanillaTranslucentDraw) and
-    // at pass end (onTranslucentPassDone).
-    private static ArrayList<WindSwayGrassDrawer.GrassQuad> pendingQuads = new ArrayList<>();
-    private static long lastWindLog = 0L;
-    private static int diagAlphaSkips = 0;
-    private static int lastFrameCount = -1;
-    private static int frames5s = 0;
-
-    // Diagnostic: counts and names objects handed back to vanilla.
-    private static final HashMap<String, Integer> rejectCounts = new HashMap<>();
-    private static final ArrayList<String> rejectSeen = new ArrayList<>();
-    private static final HashSet<String> rejectSeenSet = new HashSet<>();
-    private static int rejectSeenPrinted = 0;
-
-    private static boolean reject(String reason, IsoSprite sprite) {
-        if (!debugLog) return false;
-        rejectCounts.merge(reason, 1, Integer::sum);
-        if (rejectSeenSet.size() < 80) {
-            String entry = reason + ":" + (sprite != null && sprite.name != null ? sprite.name : "?");
-            if (rejectSeenSet.add(entry)) {
-                rejectSeen.add(entry);
-            }
-        }
-        return false;
-    }
-
-    // Batch order = capture order = vanilla paint order; against no-depth-
-    // write translucents (fences, doors, handed-back objects) it is kept by
-    // flushing before any such draw that can overlap the pending bounds.
-    // Depth cannot stand in for paint order: neighbouring squares'
-    // [zNear,zFar] ranges overlap and blade depth interleaves across them.
-    private static boolean pendBoundsValid = false;
-    private static float pendMinX;
-    private static float pendMinY;
-    private static float pendMaxX;
-    private static float pendMaxY;
-
-    // Screen reach of a tile sprite from its square anchor in scene ortho
-    // pixels (largest tile sprites: 256x512 plus offsets). False positive
-    // = one extra flush; false negative = grass over a fence.
-    private static final float OVERLAP_PAD = 768.0f;
-
-    private static int flushCount5s = 0;
-    private static int flushQuads5s = 0;
-    private static int maxBatch5s = 0;
-
-    // Diagnostic: flush causes for the 5s log.
-    private static int flushDoor5s = 0;
-    private static int flushObj5s = 0;
-    private static int flushTree5s = 0;
-    private static int flushPass5s = 0;
-    private static int gateSkip5s = 0;
-    private static int wallsCaptured5s = 0;
-    private static int flushOrder5s = 0;
-    private static final ArrayList<String> flushSeen = new ArrayList<>();
-    private static final HashSet<String> flushSeenSet = new HashSet<>();
-    private static int flushSeenPrinted = 0;
-
-    private static void noteFlushTrigger(IsoObject object, boolean doorOrWall) {
-        if (!debugLog) return;
-        if (doorOrWall) {
-            flushDoor5s++;
-        } else {
-            flushObj5s++;
-        }
-        if (flushSeenSet.size() < 40) {
-            IsoSprite spr = object != null ? object.getSprite() : null;
-            String entry = (doorOrWall ? "door:" : "obj:")
-                    + (spr != null && spr.name != null ? spr.name
-                            : object != null ? object.getClass().getSimpleName() : "null");
-            if (flushSeenSet.add(entry)) {
-                flushSeen.add(entry);
-            }
-        }
-    }
-
-    private static void extendPendingBounds(WindSwayGrassDrawer.GrassQuad q) {
-        float x0 = q.ox - q.padL + Math.min(q.ox1, q.ox4) * q.w;
-        float x1 = q.ox + q.w + q.padR + Math.max(q.ox2, q.ox3) * q.w;
-        float y0 = q.oy + Math.min(q.oy1, q.oy2) * q.h;
-        float y1 = q.oy + q.h + Math.max(q.oy3, q.oy4) * q.h;
-        if (!pendBoundsValid) {
-            pendBoundsValid = true;
-            pendMinX = x0;
-            pendMaxX = x1;
-            pendMinY = y0;
-            pendMaxY = y1;
-        } else {
-            pendMinX = Math.min(pendMinX, x0);
-            pendMaxX = Math.max(pendMaxX, x1);
-            pendMinY = Math.min(pendMinY, y0);
-            pendMaxY = Math.max(pendMaxY, y1);
-        }
-    }
-
-    static volatile boolean flushPrecise = true;
 
     public static void setFlushPrecise(boolean v) {
-        flushPrecise = v;
+        BatchSequencer.flushPrecise = v;
     }
-
-    private static final float[] objRect = new float[4];
-    private static final float OBJ_SLACK = 96.0f;
-
-    // Tile frame of a vanilla-drawn object, x1 y1 x2 y2 in offscreen px: anchor
-    // minus sprite offsets, untrimmed texture size, a margin for attachments.
-    private static boolean objectRect(IsoObject object, IsoGridSquare square, float[] out) {
-        IsoSprite sprite = object.getSprite();
-        if (sprite == null) return false;
-        IsoSpriteInstance inst = sprite.def;
-        float ix = inst != null ? inst.offX : 0.0f;
-        float iy = inst != null ? inst.offY : 0.0f;
-        float iz = inst != null ? inst.offZ : 0.0f;
-        float sx = IsoUtils.XToScreen(square.x + ix, square.y + iy, square.z + iz, 0)
-                - IsoCamera.frameState.offX - object.offsetX;
-        float sy = IsoUtils.YToScreen(square.x + ix, square.y + iy, square.z + iz, 0)
-                - IsoCamera.frameState.offY - (object.offsetY + object.getRenderYOffset() * (float) Core.tileScale);
-        float w = 64.0f * Core.tileScale;
-        float h = 128.0f * Core.tileScale;
-        Texture tex = sprite.getTextureForCurrentFrame(object.getDir(), object);
-        if (tex != null) {
-            w = Math.max(w, tex.getWidthOrig());
-            h = Math.max(h, tex.getHeightOrig());
-        }
-        out[0] = sx - OBJ_SLACK;
-        out[1] = sy - OBJ_SLACK;
-        out[2] = sx + w + OBJ_SLACK;
-        out[3] = sy + h + OBJ_SLACK;
-        return true;
-    }
-
-    private static boolean rectsHitPending(float[] r, int n) {
-        if (!pendBoundsValid) return false;
-        for (int i = 0; i < n; ++i) {
-            if (r[i * 4] < pendMaxX && r[i * 4 + 2] > pendMinX
-                    && r[i * 4 + 1] < pendMaxY && r[i * 4 + 3] > pendMinY) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    private static boolean rectsHitQuads(float[] r, int n) {
-        float ux0 = Float.MAX_VALUE;
-        float uy0 = Float.MAX_VALUE;
-        float ux1 = -Float.MAX_VALUE;
-        float uy1 = -Float.MAX_VALUE;
-        for (int i = 0; i < n; ++i) {
-            ux0 = Math.min(ux0, r[i * 4]);
-            uy0 = Math.min(uy0, r[i * 4 + 1]);
-            ux1 = Math.max(ux1, r[i * 4 + 2]);
-            uy1 = Math.max(uy1, r[i * 4 + 3]);
-        }
-        for (int k = 0; k < pendingQuads.size(); ++k) {
-            WindSwayGrassDrawer.GrassQuad q = pendingQuads.get(k);
-            float x0 = q.ox - q.padL + Math.min(q.ox1, q.ox4) * q.w;
-            float x1 = q.ox + q.w + q.padR + Math.max(q.ox2, q.ox3) * q.w;
-            float y0 = q.oy + Math.min(q.oy1, q.oy2) * q.h;
-            float y1 = q.oy + q.h + Math.max(q.oy3, q.oy4) * q.h;
-            if (ux0 >= x1 || ux1 <= x0 || uy0 >= y1 || uy1 <= y0) continue;
-            for (int i = 0; i < n; ++i) {
-                if (r[i * 4] < x1 && r[i * 4 + 2] > x0 && r[i * 4 + 1] < y1 && r[i * 4 + 3] > y0) {
-                    return true;
-                }
-            }
-        }
-        return false;
-    }
-
-    private static void flushPending() {
-        if (pendingQuads.isEmpty()) return;
-        int n = pendingQuads.size();
-        WindSwayGrassDrawer grass = new WindSwayGrassDrawer();
-        grass.set(pendingQuads);
-        pendingQuads = new ArrayList<>();
-        pendBoundsValid = false;
-        SpriteRenderer.instance.drawGeneric(grass);
-        if (debugLog) {
-            flushCount5s++;
-            flushQuads5s += n;
-            if (n > maxBatch5s) {
-                maxBatch5s = n;
-            }
-        }
-    }
-
-    // Flush before a no-depth-write vanilla translucent that can touch the
-    // pending batches: held trees first (paint order), then the grass. Trees
-    // and character models write depth and need none.
-    public static void onVanillaTranslucentDraw(IsoObject object, boolean doorOrWall) {
-        try {
-            if (pendingQuads.isEmpty() && pendingTrees == null) return;
-            if (!FBORenderCell.instance.renderTranslucentOnly) return;
-            if (object instanceof IsoTree) return;
-            IsoGridSquare square = object != null ? object.getSquare() : null;
-            if (square == null) {
-                flushPendingTrees(FLUSH_TREES_OBJ);
-                noteFlushTrigger(object, doorOrWall);
-                flushPending();
-                return;
-            }
-            boolean precise = flushPrecise && objectRect(object, square, objRect);
-            if (!precise) {
-                float ax = IsoUtils.XToScreen(square.x, square.y, square.z, 0) - IsoCamera.frameState.offX;
-                float ay = IsoUtils.YToScreen(square.x, square.y, square.z, 0) - IsoCamera.frameState.offY;
-                objRect[0] = ax - TREE_OVERLAP_PAD;
-                objRect[1] = ay - TREE_OVERLAP_PAD;
-                objRect[2] = ax + TREE_OVERLAP_PAD;
-                objRect[3] = ay + TREE_OVERLAP_PAD;
-            }
-            // Union box first: the per-tree and per-quad scans are the
-            // expensive part and the miss is the common case.
-            if (pendingTrees != null) {
-                boolean hit = rectHitsTreeUnion(objRect) && (!precise || rectHitsTrees(objRect));
-                if (hit) {
-                    flushPendingTrees(FLUSH_TREES_OBJ);
-                } else if (debugLog) {
-                    treeGateSkip5s++;
-                }
-            }
-            if (pendingQuads.isEmpty()) return;
-            if (!precise) {
-                float ax = 0.5f * (objRect[0] + objRect[2]);
-                float ay = 0.5f * (objRect[1] + objRect[3]);
-                objRect[0] = ax - OVERLAP_PAD;
-                objRect[1] = ay - OVERLAP_PAD;
-                objRect[2] = ax + OVERLAP_PAD;
-                objRect[3] = ay + OVERLAP_PAD;
-            }
-            boolean hitGrass = rectsHitPending(objRect, 1) && (!precise || rectsHitQuads(objRect, 1));
-            if (!hitGrass) {
-                if (debugLog) gateSkip5s++;
-                return;
-            }
-            noteFlushTrigger(object, doorOrWall);
-            flushPendingInOrder(FLUSH_TREES_OBJ);
-        } catch (Throwable t) {
-            // Ordering beats batching: if the bounds test dies, draw what
-            // we have.
-            flushPendingTrees(FLUSH_TREES_OBJ);
-            flushPending();
-        }
-    }
-
-    // Vanilla draws a held tree list before the next non-tree object, so
-    // quads captured after the hold paint after the trees. Drawn first,
-    // they write no depth and a tree drawn later covers them (a fence in
-    // front of a fir). Quads captured before the hold may go first, as in
-    // vanilla.
-    private static void flushPendingInOrder(int cause) {
-        if (pendingTrees != null) {
-            if (pendingQuads.size() > treeHoldQuadMark) {
-                if (debugLog) flushOrder5s++;
-                flushPendingTrees(cause);
-            } else {
-                treeHoldQuadMark = 0;
-            }
-        }
-        flushPending();
-    }
-
-    // Tree list merge. Vanilla cuts FBORenderTrees.current at every non-tree
-    // translucent in paint order (hundreds of one-tree lists per frame in a
-    // forest). Lists are held (drawGeneric skipped) and merged into one
-    // pending list, queued when something that must paint after them arrives.
-    // Valid because everything between two opaque lists depth-tests against
-    // the trees and writes no depth. A see-through tree breaks that for the
-    // grass captured before it: such a list flushes trees and grass first and
-    // becomes the new pending list. Tree objects come from one ownerless pool.
-    private static FBORenderTrees pendingTrees;
-    private static int pendingTreeFrame = -1;
-    // pendingQuads.size() when the current hold began.
-    private static int treeHoldQuadMark;
-    private static boolean treeFlushing;
-    private static float treeMinX;
-    private static float treeMinY;
-    private static float treeMaxX;
-    private static float treeMaxY;
-    // Screen reach from the SE anchor: an XXL frame is 896 x 1024 scene px
-    // plus the pad.
-    private static final float TREE_OVERLAP_PAD = 1600.0f;
-    private static final int FLUSH_TREES_OBJ = 0;
-    private static final int FLUSH_TREES_SEE = 1;
-    private static final int FLUSH_TREES_PASS = 2;
-    private static Field treePoolField;
-    private static boolean treePoolOk = true;
-    private static boolean mergeOk = true;
-    private static int held5s;
-    private static int merged5s;
-    private static int treeFlushObj5s;
-    private static int treeFlushSee5s;
-    private static int treeFlushPass5s;
-    private static int treeGateSkip5s;
-    private static int mergedTrees5s;
-    private static int mergedMax5s;
-    private static int seeStencil5s;
-    private static int seeTransp5s;
-    private static int seeFade5s;
-    private static int seeCut5s;
-    // Dry run of the see-through flush skip.
-    private static int seeLists5s;
-    private static int seeSkipRect5s;
-    private static int seeSkipBbox5s;
-    private static int seeSkipQuad5s;
-    private static final float[] holeRects = new float[8];
-    private static final float[] seeRects = new float[64 * 4];
-
-    // skipOn advice on SpriteRenderer.drawGeneric: true = the list is held.
-    public static boolean onTreeListDraw(Object drawer) {
-        if (!(drawer instanceof FBORenderTrees)) return false;
-        if (treeFlushing) return false;
-        try {
-            if (!FBORenderCell.instance.renderTranslucentOnly) return false;
-            if (pendingQuads.isEmpty() && pendingTrees == null
-                    && (!enabled || !mergeOk || !TreeRenderer.active())) {
-                return false;
-            }
-            FBORenderTrees list = (FBORenderTrees) drawer;
-            int seeKind = TreeRenderer.seeThroughKind(list);
-            boolean seeThrough = seeKind != 0;
-            // A see-through list needs the grass flush only where its see-through
-            // pixels meet a pending quad.
-            boolean seeFlush = seeThrough;
-            if (seeThrough && flushPrecise) {
-                int holeN = StencilHole.rects(holeRects);
-                int n = TreeRenderer.seeThroughRects(list, holeRects, holeN, seeRects);
-                boolean bboxHit = n != 0 && (n < 0 || rectsHitPending(seeRects, n));
-                boolean quadHit = bboxHit && (n < 0 || rectsHitQuads(seeRects, n));
-                seeFlush = quadHit;
-                if (debugLog) {
-                    if (n == 0) seeSkipRect5s++;
-                    else if (!bboxHit) seeSkipBbox5s++;
-                    else if (!quadHit) seeSkipQuad5s++;
-                }
-            }
-            if (debugLog && seeThrough) {
-                seeLists5s++;
-                if ((seeKind & TreeRenderer.SEE_STENCIL) != 0) seeStencil5s++;
-                if ((seeKind & TreeRenderer.SEE_TRANSPARENT) != 0) seeTransp5s++;
-                if ((seeKind & TreeRenderer.SEE_FADE) != 0) seeFade5s++;
-                if ((seeKind & TreeRenderer.SEE_CUTAWAY) != 0) seeCut5s++;
-            }
-            if (!enabled || !mergeOk || !TreeRenderer.active()) {
-                // Vanilla draws the lists; only the grass order matters.
-                if (seeFlush && !pendingQuads.isEmpty()) {
-                    if (debugLog) flushTree5s++;
-                    flushPending();
-                }
-                return false;
-            }
-            int frame = IsoCamera.frameState.frameCount;
-            if (pendingTrees != null && pendingTreeFrame != frame) {
-                // A pass that ended without its OnExit left this behind; the
-                // list was never queued, so vanilla's release is ours to call.
-                trace("stale tree list dropped");
-                pendingTrees.postRender();
-                pendingTrees = null;
-            }
-            if (seeFlush) {
-                flushPendingTrees(FLUSH_TREES_SEE);
-                if (!pendingQuads.isEmpty()) {
-                    if (debugLog) flushTree5s++;
-                    flushPending();
-                }
-            }
-            ArrayList<?> src = TreeRenderer.trees(list);
-            if (src.isEmpty()) return false;
-            if (pendingTrees == null) {
-                pendingTrees = list;
-                pendingTreeFrame = frame;
-                treeHoldQuadMark = pendingQuads.size();
-                treeMinX = Float.MAX_VALUE;
-                treeMinY = Float.MAX_VALUE;
-                treeMaxX = -Float.MAX_VALUE;
-                treeMaxY = -Float.MAX_VALUE;
-                extendTreeBounds(src, 0);
-                if (debugLog) held5s++;
-                return true;
-            }
-            ArrayList<?> dst = TreeRenderer.trees(pendingTrees);
-            int at = dst.size();
-            @SuppressWarnings("unchecked")
-            ArrayList<Object> dstObj = (ArrayList<Object>) dst;
-            // addAll copies the source to an array first.
-            for (int i = 0; i < src.size(); ++i) {
-                dstObj.add(src.get(i));
-            }
-            extendTreeBounds(dst, at);
-            src.clear();
-            recycleList(list);
-            if (debugLog) merged5s++;
-            return true;
-        } catch (Throwable t) {
-            mergeOk = false;
-            trace("tree list merge disabled: " + t, t);
-            flushPendingTrees(FLUSH_TREES_OBJ);
-            flushPending();
-            return false;
-        }
-    }
-
-    // Screen boxes of the held trees (x1 y1 x2 y2), computed once per tree:
-    // the gate below runs per vanilla draw.
-    private static float[] treeBoxes = new float[4 * 256];
-    private static int treeBoxCount;
-
-    private static void extendTreeBounds(ArrayList<?> trees, int from) throws Throwable {
-        int n = trees.size();
-        if (treeBoxes.length < n * 4) {
-            int cap = treeBoxes.length;
-            while (cap < n * 4) cap *= 2;
-            float[] grown = new float[cap];
-            System.arraycopy(treeBoxes, 0, grown, 0, treeBoxCount * 4);
-            treeBoxes = grown;
-        }
-        float[] boxes = treeBoxes;
-        for (int i = from; i < n; ++i) {
-            TreeRenderer.treeBox(trees.get(i), treeBox);
-            int k = i * 4;
-            boxes[k] = treeBox[0];
-            boxes[k + 1] = treeBox[1];
-            boxes[k + 2] = treeBox[2];
-            boxes[k + 3] = treeBox[3];
-            if (treeBox[0] < treeMinX) treeMinX = treeBox[0];
-            if (treeBox[2] > treeMaxX) treeMaxX = treeBox[2];
-            if (treeBox[1] < treeMinY) treeMinY = treeBox[1];
-            if (treeBox[3] > treeMaxY) treeMaxY = treeBox[3];
-        }
-        treeBoxCount = n;
-    }
-
-    private static final float[] treeBox = new float[4];
-
-    private static boolean rectHitsTreeUnion(float[] r) {
-        return r[0] < treeMaxX && r[2] > treeMinX && r[1] < treeMaxY && r[3] > treeMinY;
-    }
-
-    private static boolean rectHitsTrees(float[] r) {
-        float[] boxes = treeBoxes;
-        for (int i = 0, k = 0; i < treeBoxCount; ++i, k += 4) {
-            if (boxes[k] < r[2] && boxes[k + 2] > r[0] && boxes[k + 1] < r[3] && boxes[k + 3] > r[1]) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    // Back to FBORenderTrees.s_pool (package-private); a list never queued is
-    // otherwise garbage, not a double release.
-    private static void recycleList(FBORenderTrees list) {
-        if (!treePoolOk) return;
-        try {
-            Field f = treePoolField;
-            if (f == null) {
-                f = Accessor.findField(FBORenderTrees.class, "s_pool");
-                if (f == null) throw new NoSuchFieldException("s_pool");
-                f.setAccessible(true);
-                treePoolField = f;
-            }
-            if (!TreeRenderer.trees(list).isEmpty()) return;
-            @SuppressWarnings("unchecked")
-            ObjectPool<FBORenderTrees> pool = (ObjectPool<FBORenderTrees>) f.get(null);
-            pool.release(list);
-        } catch (Throwable t) {
-            treePoolOk = false;
-            trace("tree list recycling disabled: " + t);
-        }
-    }
-
-    private static void flushPendingTrees(int cause) {
-        FBORenderTrees list = pendingTrees;
-        if (list == null) return;
-        pendingTrees = null;
-        treeFlushing = true;
-        try {
-            if (debugLog) {
-                int n = 0;
-                try {
-                    n = TreeRenderer.trees(list).size();
-                } catch (Throwable ignored) {
-                }
-                mergedTrees5s += n;
-                if (n > mergedMax5s) mergedMax5s = n;
-                if (cause == FLUSH_TREES_OBJ) treeFlushObj5s++;
-                else if (cause == FLUSH_TREES_SEE) treeFlushSee5s++;
-                else treeFlushPass5s++;
-            }
-            SpriteRenderer.instance.drawGeneric(list);
-        } finally {
-            treeFlushing = false;
-        }
-    }
-
-    // Screen-right is world (+1, -1): a blade bent that way crosses the W edge
-    // of column x+1 or the N edge of row y; screen-left mirrors it. Bits 2
-    // (left) / 4 (right) mark a fence or wall on one of those edges.
-    // nav[] is geometric adjacency (doGridNav), unlike n/s/e/w, which the
-    // path finder nulls at blocked edges.
-    private static float barrierCode(IsoGridSquare sq) {
-        IsoGridSquare s = sq.getAdjacentSquare(IsoDirections.S);
-        IsoGridSquare sw = sq.getAdjacentSquare(IsoDirections.SW);
-        IsoGridSquare e = sq.getAdjacentSquare(IsoDirections.E);
-        IsoGridSquare ne = sq.getAdjacentSquare(IsoDirections.NE);
-        float code = 0.0f;
-        if (westEdge(sq) || westEdge(s) || northEdge(s) || northEdge(sw)) {
-            code += 2.0f;
-        }
-        if (westEdge(e) || westEdge(ne) || northEdge(sq) || northEdge(e)) {
-            code += 4.0f;
-        }
-        return code;
-    }
-
-    private static boolean westEdge(IsoGridSquare s) {
-        return s != null && (s.has(IsoFlagType.cutW) || s.has(IsoFlagType.collideW));
-    }
-
-    private static boolean northEdge(IsoGridSquare s) {
-        return s != null && (s.has(IsoFlagType.cutN) || s.has(IsoFlagType.collideN));
-    }
-
-    // skipOn advice (Patch_FBORenderCell): true = engine skips the
-    // object's own draw. renderTranslucent computed targetAlpha before us.
-    public static boolean tryCaptureGrass(IsoObject object) {
-        boolean captured = captureGrassInner(object);
-        if (!captured) {
-            onVanillaTranslucentDraw(object, false);
-        }
-        return captured;
-    }
-
-    public static boolean tryCaptureWall(IsoObject object) {
-        boolean captured = captureWallInner(object);
-        if (!captured) {
-            onVanillaTranslucentDraw(object, true);
-        }
-        return captured;
-    }
-
-    // renderMinusFloor_DoorOrWall, plain case only: one wall direction,
-    // no cutaway on the square, no door or window, full alpha. Corners
-    // (two halved quads), SE walls, door frames and anything cut away
-    // keep the vanilla draw.
-    public static volatile boolean wallCapture = true;
 
     public static void setWallCapture(boolean on) {
-        wallCapture = on;
-    }
-
-    private static boolean captureWallInner(IsoObject object) {
-        if (!enabled || !wallCapture) return false;
-        try {
-            if (!FBORenderCell.instance.renderTranslucentOnly) return false;
-            if (!Core.getInstance().getOptionDoWindSpriteEffects()) return false;
-            if (!WindSwayGrassDrawer.ready()) return false;
-            if (IsoSprite.seamFix2 != null) return false;
-            IsoSprite sprite = object.getSprite();
-            if (sprite == null) return false;
-            if (object instanceof IsoDoor || object instanceof IsoWindow || object instanceof IsoWindowFrame) {
-                return reject("wall:door", sprite);
-            }
-            if (object instanceof IsoThumpable && ((IsoThumpable) object).isDoor()) return reject("wall:door", sprite);
-            if (!rendersWallViaIsoObject(object.getClass())) return reject("wall:ownRender", sprite);
-            boolean cutN = sprite.cutN;
-            boolean cutW = sprite.cutW;
-            if (cutN == cutW) return reject("wall:corner", sprite);
-            if (object.isWallSE()) return reject("wall:se", sprite);
-            IsoObjectType t = sprite.getTileType();
-            if (t == IsoObjectType.doorFrN || t == IsoObjectType.doorN
-                    || t == IsoObjectType.doorFrW || t == IsoObjectType.doorW) {
-                return reject("wall:door", sprite);
-            }
-            if (sprite.getProperties().has(IsoFlagType.DoorWallN) || sprite.getProperties().has(IsoFlagType.DoorWallW)
-                    || sprite.getProperties().has(IsoFlagType.doorN) || sprite.getProperties().has(IsoFlagType.doorW)) {
-                return reject("wall:doorWall", sprite);
-            }
-            if (sprite.getProperties().has(IsoFlagType.NoWallLighting)) return reject("wall:noLight", sprite);
-            if ((sprite.depthFlags & 4) != 0) return reject("wall:opaque", sprite);
-            IsoGridSquare square = object.getSquare();
-            if (square == null) return reject("noSquare", sprite);
-            int playerIndex = IsoCamera.frameState.playerIndex;
-            if (square.getPlayerCutawayFlag(playerIndex, 0L) != 0) return reject("wall:cutaway", sprite);
-            ObjectRenderInfo renderInfo = object.getRenderInfo(playerIndex);
-            if (renderInfo.cutawayOutline) return reject("wall:cutaway", sprite);
-            if (renderInfo.targetAlpha != 1.0f) return reject("wall:alpha", sprite);
-            if (object.getSpriteModel() != null) return reject("model", sprite);
-            if (FBORenderObjectHighlight.getInstance().shouldRenderObjectHighlight(object)) {
-                return reject("highlight", sprite);
-            }
-            if (object.getOverlaySprite() != null) return reject("wall:overlay", sprite);
-            ArrayList<IsoSpriteInstance> attachments = object.getAttachedAnimSprite();
-            if (attachments != null && !attachments.isEmpty()) return reject("wall:attached", sprite);
-            if (object.hasAnimatedAttachments()) return reject("animAttach", sprite);
-            // renderWallTile draws nothing for these; vanilla still ends
-            // the object at alpha 1.
-            if (object.isSpriteInvisible()) {
-                object.setAlphaAndTarget(playerIndex, 1.0f);
-                return true;
-            }
-            IsoSpriteInstance inst = sprite.def;
-            if (inst == null) return reject("noDef", sprite);
-            Texture tex = sprite.getTextureForCurrentFrame(cutN ? IsoDirections.N : IsoDirections.W, object);
-            if (tex == null || tex.getTextureId() == null) return reject("noTex", sprite);
-            Texture depthTex = selectWallDepthTexture(sprite, cutN);
-            if (depthTex == null || depthTex.getTextureId() == null) return reject("noDepthTex", sprite);
-
-            float scaleX = inst.scaleX;
-            float scaleY = inst.scaleY;
-            int wOrig = tex.getWidthOrig();
-            int hOrig = tex.getHeightOrig();
-            if (Core.tileScale == 2 && wOrig == 64 && hOrig == 128) {
-                scaleX = 2.0f;
-                scaleY = 2.0f;
-            }
-            if (Core.tileScale == 2 && scaleX == 2.0f && scaleY == 2.0f && wOrig == 128 && hOrig == 256) {
-                scaleX = 1.0f;
-                scaleY = 1.0f;
-            }
-            if (scaleX <= 0.0f || scaleY <= 0.0f) return reject("badScale", sprite);
-
-            PlayerCamera camera = IsoCamera.cameras[playerIndex];
-            float offsetXParam = object.offsetX;
-            float offsetYParam = object.offsetY + object.getRenderYOffset() * (float) Core.tileScale;
-            float baseSx = IsoUtils.XToScreen(square.x + inst.offX, square.y + inst.offY, square.z + inst.offZ, 0);
-            float baseSy = IsoUtils.YToScreen(square.x + inst.offX, square.y + inst.offY, square.z + inst.offZ, 0);
-            baseSx -= offsetXParam;
-            baseSy -= offsetYParam;
-            baseSx += -IsoCamera.frameState.offX;
-            baseSy += -IsoCamera.frameState.offY;
-            float pickerX = baseSx;
-            float pickerY = baseSy;
-            float zoom = IsoCamera.frameState.zoom;
-            baseSx += camera.fixJigglyModelsX * zoom;
-            baseSy += camera.fixJigglyModelsY * zoom;
-
-            // setupTileDepthWall passes z2 == z: no renderYOffset ramp.
-            float jx = square.x + camera.fixJigglyModelsSquareX;
-            float jy = square.y + camera.fixJigglyModelsSquareY;
-            int camX = PZMath.fastfloor(IsoCamera.frameState.camCharacterX);
-            int camY = PZMath.fastfloor(IsoCamera.frameState.camCharacterY);
-            float zFar = IsoDepthHelper.getSquareDepthData(camX, camY, jx, jy, square.z).depthStart;
-            float zNear = IsoDepthHelper.getSquareDepthData(camX, camY, jx + 1.0f, jy + 1.0f, square.z + 1.0f).depthStart;
-
-            // DoWallLightingN/W: the flat colour is white and WallShaper
-            // replaces rgb per corner, so customColor and forceAmbient
-            // never reach the main sprite. Upper corners take the
-            // contrast tweak against the lower ones.
-            int vertU = square.getVertLight(0, playerIndex);
-            int vertU2 = square.getVertLight(4, playerIndex);
-            int vertL = square.getVertLight(cutN ? 1 : 3, playerIndex);
-            int vertL2 = square.getVertLight(cutN ? 5 : 7, playerIndex);
-            float[] c = wallCornerScratch;
-            unpackABGR(vertU2, c, 0);
-            unpackABGR(vertL, c, 3);
-            unpackTweaked(vertU, vertU2, c, 6);
-            unpackTweaked(vertL2, vertL, c, 9);
-            if (FBORenderCell.instance.isBlackedOutBuildingSquare(square)) {
-                float keep = 1.0f - FBORenderCell.instance.getBlackedOutRoomFadeRatio(square);
-                for (int i = 0; i < 12; ++i) c[i] *= keep;
-            }
-            // c: 0 colu2 (raw upper vert 4), 3 coll (raw lower vert 1/3),
-            // 6 colu (tweaked vert 0), 9 coll2 (tweaked vert 5/7).
-            // N: col0 colu2, col1 coll2, col2 coll, col3 colu.
-            // W: col0 coll2, col1 colu2, col2 colu, col3 coll.
-            int c0 = cutN ? 0 : 9;
-            int c1 = cutN ? 9 : 0;
-            int c2 = cutN ? 3 : 6;
-            int c3 = cutN ? 6 : 3;
-
-            WindSwayGrassDrawer.GrassQuad q = buildPart(tex, depthTex, sprite, baseSx, baseSy,
-                    scaleX, scaleY, 1.0f, 1.0f, inst.flip,
-                    zNear, zFar, null, c[c0], c[c0 + 1], c[c0 + 2], 1.0f);
-            q.lit = true;
-            q.r1 = c[c1];
-            q.g1 = c[c1 + 1];
-            q.b1 = c[c1 + 2];
-            q.r2 = c[c2];
-            q.g2 = c[c2 + 1];
-            q.b2 = c[c2 + 2];
-            q.r3 = c[c3];
-            q.g3 = c[c3 + 1];
-            q.b3 = c[c3 + 2];
-            if (debugTint) {
-                q.r1 = q.r2 = q.r3 = q.r;
-                q.g1 = q.g2 = q.g3 = q.g;
-                q.b1 = q.b2 = q.b3 = q.b;
-            }
-            if (pendingQuads.size() > 100000) {
-                pendingQuads.clear();
-                pendBoundsValid = false;
-                WindSwayGrassDrawer.fail("pending batch overflowed, pass advice not running?");
-                return false;
-            }
-            pendingQuads.add(q);
-            extendPendingBounds(q);
-            if (debugLog) wallsCaptured5s++;
-
-            // renderMinusFloor_DoorOrWall: setAlphaAndTarget(target),
-            // performDrawWallOnly ends with setAlpha(1); target is 1 here.
-            object.setAlphaAndTarget(playerIndex, 1.0f);
-            if (!WeatherFxMask.isRenderingMask()
-                    && !FBORenderObjectHighlight.getInstance().isRendering()
-                    && !FBORenderObjectOutline.getInstance().isRendering()) {
-                ObjectRenderInfo ri = object.getRenderInfo(playerIndex);
-                ri.renderX = pickerX;
-                ri.renderY = pickerY;
-                ri.renderWidth = wOrig * scaleX;
-                ri.renderHeight = hOrig * scaleY;
-                ri.renderScaleX = scaleX;
-                ri.renderScaleY = scaleY;
-                ri.renderAlpha = 1.0f;
-            }
-            wallNoPicking(object, sprite, square, playerIndex, cutN, cutW);
-            return true;
-        } catch (Throwable t) {
-            if (!wallCaptureFailedLogged) {
-                wallCaptureFailedLogged = true;
-                trace("wall capture failed, falling back to vanilla draw", t);
-            }
-            return false;
-        }
-    }
-
-    private static volatile boolean wallCaptureFailedLogged = false;
-    private static final float[] wallCornerScratch = new float[12];
-
-    private static void unpackABGR(int abgr, float[] out, int at) {
-        out[at] = Color.getRedChannelFromABGR(abgr);
-        out[at + 1] = Color.getGreenChannelFromABGR(abgr);
-        out[at + 2] = Color.getBlueChannelFromABGR(abgr);
-    }
-
-    // DoWallLightingN/W contrast step: each channel of col nudged 4.5 %
-    // away from ref.
-    private static void unpackTweaked(int col, int ref, float[] out, int at) {
-        float r = Color.getRedChannelFromABGR(col);
-        float g = Color.getGreenChannelFromABGR(col);
-        float b = Color.getBlueChannelFromABGR(col);
-        float rr = Color.getRedChannelFromABGR(ref);
-        float rg = Color.getGreenChannelFromABGR(ref);
-        float rb = Color.getBlueChannelFromABGR(ref);
-        out[at] = PZMath.clamp(r * (r >= rr ? 1.045f : 0.955f), 0.0f, 1.0f);
-        out[at + 1] = PZMath.clamp(g * (g >= rg ? 1.045f : 0.955f), 0.0f, 1.0f);
-        out[at + 2] = PZMath.clamp(b * (b >= rb ? 1.045f : 0.955f), 0.0f, 1.0f);
-    }
-
-    // setupWallDepth for the main sprite: authored map, else the preset
-    // for the direction (door-frame and SE presets are rejected before).
-    private static Texture selectWallDepthTexture(IsoSprite sprite, boolean north) {
-        TileDepthTexture authored = sprite.depthTexture;
-        if (authored != null && !authored.isEmpty()) {
-            return authored.getTexture();
-        }
-        return TileDepthMapManager.instance.getTextureForPreset(
-                north ? TileDepthMapManager.TileDepthPreset.NWall : TileDepthMapManager.TileDepthPreset.WWall);
-    }
-
-    // IsoObject.prepareToRender's picker gate for the skipped draw: a wall
-    // between the camera character and the viewer is not clickable.
-    private static void wallNoPicking(IsoObject object, IsoSprite sprite, IsoGridSquare square,
-            int playerIndex, boolean cutN, boolean cutW) {
-        if (IsoCamera.getCameraCharacter() == null) return;
-        float camCharacterX = IsoCamera.frameState.camCharacterX;
-        float camCharacterY = IsoCamera.frameState.camCharacterY;
-        float camCharacterZ = IsoCamera.frameState.camCharacterZ;
-        if (IsoWorld.instance.currentCell.IsPlayerWindowPeeking(playerIndex)) {
-            IsoPlayer player = IsoPlayer.players[playerIndex];
-            IsoDirections playerDir = IsoDirections.fromAngle(player.getForwardDirection());
-            if (playerDir == IsoDirections.N || playerDir == IsoDirections.NW) camCharacterY -= 1.0f;
-            if (playerDir == IsoDirections.W || playerDir == IsoDirections.NW) camCharacterX -= 1.0f;
-        }
-        boolean noPicking = false;
-        if ((square.getX() > camCharacterX || square.getY() > camCharacterY)
-                && PZMath.fastfloor(camCharacterZ) <= square.getZ()) {
-            boolean cutWest = cutW && square.getX() > camCharacterX;
-            boolean cutNorth = cutN && square.getY() > camCharacterY;
-            if (cutWest && square.getProperties().has(IsoFlagType.WallSE) && square.getY() <= camCharacterY) {
-                cutWest = false;
-            }
-            boolean cut = cutWest || cutNorth;
-            if (sprite.getProperties().has(IsoFlagType.halfheight)) cut = false;
-            if (cut) {
-                noPicking = object.rerouteMask == null
-                        && !(object instanceof IsoThumpable)
-                        && !sprite.getProperties().has(IsoFlagType.HoppableN)
-                        && !sprite.getProperties().has(IsoFlagType.HoppableW);
-            }
-        }
-        object.noPicking = noPicking;
-    }
-
-    private static final HashMap<Class<?>, Boolean> renderWallViaIsoObject = new HashMap<>();
-
-    // IsoThumpable's override only diverts double doors, rejected before.
-    private static boolean rendersWallViaIsoObject(Class<?> cls) {
-        Boolean known = renderWallViaIsoObject.get(cls);
-        if (known != null) return known;
-        boolean result;
-        try {
-            Class<?> decl = cls.getMethod("renderWallTile", IsoDirections.class, float.class, float.class,
-                    float.class, ColorInfo.class, boolean.class, boolean.class, Shader.class,
-                    Consumer.class).getDeclaringClass();
-            result = decl == IsoObject.class || decl == IsoThumpable.class;
-        } catch (Throwable t) {
-            result = false;
-        }
-        renderWallViaIsoObject.put(cls, result);
-        return result;
-    }
-
-    private static boolean captureGrassInner(IsoObject object) {
-        if (!enabled) return false;
-        try {
-            if (!FBORenderCell.instance.renderTranslucentOnly) return false;
-            if (!Core.getInstance().getOptionDoWindSpriteEffects()) return false;
-            if (!WindSwayGrassDrawer.ready()) return false;
-            // setupTileDepth's special-object list (chunk depth or own
-            // shader). Everything else on this path is a tile-depth quad;
-            // capturing non-wind objects too keeps a field one pipeline
-            // instead of a flush storm.
-            if (object instanceof IsoTree || object instanceof IsoGameCharacter
-                    || object instanceof IsoFire || object instanceof IsoFireplace
-                    || object instanceof IsoWorldInventoryObject
-                    || object instanceof IsoZombieGiblets
-                    || object instanceof IsoMolotovCocktail
-                    || object instanceof IsoCarBatteryCharger
-                    || object instanceof IsoBarbecue
-                    || object instanceof IsoTrap) {
-                return false;
-            }
-            IsoSprite sprite = object.getSprite();
-            if (sprite == null) return false;
-            if (!rendersViaIsoObject(object.getClass())) return reject("ownRender", sprite);
-            IsoGridSquare square = object.getSquare();
-            if (square == null) return reject("noSquare", sprite);
-            // IsoObject.render draws nothing for these; capture as nothing
-            // but keep the targetAlpha handoff.
-            if (!object.getDoRender() || object.isSpriteInvisible()) {
-                int pi = IsoCamera.frameState.playerIndex;
-                object.setTargetAlpha(pi, object.getRenderInfo(pi).targetAlpha);
-                return true;
-            }
-            // Rendered as 3D models in vanilla, not sprites.
-            if (object.getSpriteModel() != null) return reject("model", sprite);
-            // Highlight blending (hover/selection) stays vanilla.
-            if (FBORenderObjectHighlight.getInstance().shouldRenderObjectHighlight(object)) {
-                return reject("highlight", sprite);
-            }
-            // Windows and wall overlays get directional wall depth
-            // (setupWallDepth), not replicated.
-            if (sprite.getProperties().has(IsoFlagType.windowN)
-                    || sprite.getProperties().has(IsoFlagType.windowW)
-                    || sprite.getProperties().has(IsoFlagType.WallOverlay)) {
-                return reject("wallDepth", sprite);
-            }
-            // Animated attachments draw via a separate engine call after
-            // renderMinusFloor that our skip does not cover; capturing the
-            // body would flush it behind its own attachments.
-            if (object.hasAnimatedAttachments()) return reject("animAttach", sprite);
-            IsoSpriteInstance inst = sprite.def;
-            if (inst == null) return reject("noDef", sprite);
-            Texture tex = sprite.getTextureForCurrentFrame(object.getDir(), object);
-            if (tex == null || tex.getTextureId() == null) return reject("noTex", sprite);
-            Texture mainDepthTex = selectDepthTexture(sprite, object);
-            if (mainDepthTex == null || mainDepthTex.getTextureId() == null) return reject("noDepthTex", sprite);
-
-            // performRenderFrame's tileScale fixups, local copy (vanilla
-            // applies them by mutating the shared def in the skipped draw).
-            float scaleX = inst.scaleX;
-            float scaleY = inst.scaleY;
-            int wOrig = tex.getWidthOrig();
-            int hOrig = tex.getHeightOrig();
-            if (Core.tileScale == 2 && wOrig == 64 && hOrig == 128) {
-                scaleX = 2.0f;
-                scaleY = 2.0f;
-            }
-            if (Core.tileScale == 2 && scaleX == 2.0f && scaleY == 2.0f && wOrig == 128 && hOrig == 256) {
-                scaleX = 1.0f;
-                scaleY = 1.0f;
-            }
-            if (scaleX <= 0.0f || scaleY <= 0.0f) return reject("badScale", sprite);
-
-            int playerIndex = IsoCamera.frameState.playerIndex;
-            PlayerCamera camera = IsoCamera.cameras[playerIndex];
-
-            // Vanilla draws with pre-step alpha and steps afterwards; step
-            // only on paths that return true, on fallback vanilla steps
-            // itself.
-            float target = object.getRenderInfo(playerIndex).targetAlpha;
-            object.setTargetAlpha(playerIndex, target);
-            float alpha = object.getAlpha(playerIndex);
-            if (alpha <= 0.01f) {
-                if (debugLog) diagAlphaSkips++;
-                stepAlphaLikeVanilla(object, square, playerIndex, target);
-                return true;
-            }
-
-            // All-or-nothing: any undrawable part sends the whole object
-            // back to vanilla, half objects read as holes.
-            ArrayList<IsoSpriteInstance> attachments = object.getAttachedAnimSprite();
-            int attachedCount = attachments != null ? attachments.size() : 0;
-
-            // Vanilla reuses obj.sx from the main draw for attachments;
-            // their instance offsets never enter the anchor.
-            float offsetXParam = object.offsetX;
-            float offsetYParam = object.offsetY + object.getRenderYOffset() * (float) Core.tileScale;
-            float baseSx = IsoUtils.XToScreen(square.x + inst.offX, square.y + inst.offY, square.z + inst.offZ, 0);
-            float baseSy = IsoUtils.YToScreen(square.x + inst.offX, square.y + inst.offY, square.z + inst.offZ, 0);
-            baseSx -= offsetXParam;
-            baseSy -= offsetYParam;
-            baseSx += -IsoCamera.frameState.offX;
-            baseSy += -IsoCamera.frameState.offY;
-            // Picker anchor: vanilla sx - offX, no jiggly term.
-            float pickerX = baseSx;
-            float pickerY = baseSy;
-            float zoom = IsoCamera.frameState.zoom;
-            baseSx += camera.fixJigglyModelsX * zoom;
-            baseSy += camera.fixJigglyModelsY * zoom;
-
-            // startTileDepthShader, translucent branch: near = SE corner
-            // one level up.
-            float jx = square.x + camera.fixJigglyModelsSquareX;
-            float jy = square.y + camera.fixJigglyModelsSquareY;
-            int camX = PZMath.fastfloor(IsoCamera.frameState.camCharacterX);
-            int camY = PZMath.fastfloor(IsoCamera.frameState.camCharacterY);
-            float zFar = IsoDepthHelper.getSquareDepthData(camX, camY, jx, jy, square.z).depthStart;
-            float zNear = IsoDepthHelper.getSquareDepthData(camX, camY, jx + 1.0f, jy + 1.0f, square.z + 1.0f).depthStart;
-            float yOff = object.getRenderYOffset();
-            if (yOff != 0.0f) {
-                float dz = yOff / 96.0f * 0.0028867084f;
-                zFar -= dz;
-                zNear -= dz;
-            }
-
-            // Raw square light feeds overlay and attachments; only the
-            // main sprite gets customColor and forceAmbient. The upper
-            // part of a multi-level object in a collapsed building is lit
-            // from the square below (renderMinusFloor_NotDoorOrWall);
-            // only the overlaySpriteColor path reads the object's own
-            // square (renderOverlaySprites).
-            ColorInfo ownLi = square.getLightInfo(playerIndex);
-            ColorInfo li = ownLi;
-            if (FBORenderCutaways.getInstance().isForceRenderSquare(playerIndex, square)) {
-                IsoGridSquare below = square.getCell().getGridSquare(square.x, square.y, square.z - 1);
-                if (below != null) li = below.getLightInfo(playerIndex);
-            }
-            float liR = 1.0f;
-            float liG = 1.0f;
-            float liB = 1.0f;
-            float liA = 1.0f;
-            if (li != null) {
-                liR = li.r;
-                liG = li.g;
-                liB = li.b;
-                liA = li.a;
-            }
-            float ownR = ownLi != null ? ownLi.r : 1.0f;
-            float ownG = ownLi != null ? ownLi.g : 1.0f;
-            float ownB = ownLi != null ? ownLi.b : 1.0f;
-            // Blacked-out buildings and configRoomFade rooms: vanilla
-            // scales rgb by 1 - fadeRatio (prepareToRender), forceAmbient
-            // overrides it, overlays without overlaySpriteColor get it
-            // twice (renderAttachedAndOverlaySpritesInternal, then
-            // renderOverlaySprites again).
-            float fade = 1.0f;
-            if (FBORenderCell.instance.isBlackedOutBuildingSquare(square)) {
-                fade = 1.0f - FBORenderCell.instance.getBlackedOutRoomFadeRatio(square);
-            }
-            float lr = liR * fade;
-            float lg = liG * fade;
-            float lb = liB * fade;
-            ColorInfo custom = object.getCustomColor();
-            if (custom != null) {
-                lr *= custom.r;
-                lg *= custom.g;
-                lb *= custom.b;
-            }
-            if (sprite.forceAmbient) {
-                float ambient = RenderSettings.getInstance().getAmbientForPlayer(playerIndex);
-                if (object.isUseSnowSprite()) {
-                    ambient = PZMath.clamp(ambient * 1.2f, 0.0f, 1.0f);
-                }
-                lr = ambient * object.tintr;
-                lg = ambient * object.tintg;
-                lb = ambient * object.tintb;
-            }
-
-            // Corner fractions get copied in buildPart: the shared pools
-            // mutate on the game thread while the render thread draws.
-            // Trample beats wind, as in performRenderFrame. Wind flora without a
-            // trample bends in the shader: pool corners dropped, sway parameters on
-            // the vertices.
-            ObjectRenderEffects ore = object.getObjectRenderEffectsToApply();
-            float windS = 0.0f;
-            float windSeed = 0.0f;
-            float windFrac = 0.0f;
-            float windPeriod = 0.0f;
-            if (sprite.moveWithWind && ore == object.getWindRenderEffects() && !rigidFlora(sprite)) {
-                ore = null;
-                windS = (float) ((square.x - square.y) / SQRT2);
-                windSeed = TreeSway.hash(square.x * 7919 + square.y * 104729 + square.z * 31 + sprite.tileSheetIndex, 9);
-                if (sprite.isBush) {
-                    windFrac = (float) TreeSway.bushAmpMax;
-                    windPeriod = (float) TreeSway.bushPeriod;
-                } else {
-                    double stiff = sprite.windType == 2 ? TreeSway.plantStiff2
-                            : (sprite.windType == 3 ? TreeSway.plantStiff3 : 1.0);
-                    windFrac = (float) (TreeSway.plantAmpMax * stiff);
-                    windPeriod = (float) (TreeSway.plantPeriod / (0.7 + 0.3 * stiff));
-                }
-            }
-
-            ArrayList<WindSwayGrassDrawer.GrassQuad> parts = partsScratch;
-            parts.clear();
-            parts.add(buildPart(tex, mainDepthTex, sprite, baseSx, baseSy,
-                    scaleX, scaleY, scaleX, scaleY, inst.flip,
-                    zNear, zFar, ore, lr, lg, lb, alpha));
-
-            // renderOverlaySprites: after main, before attachments; own
-            // color, copyTargetAlpha multiplies the object alpha.
-            IsoSprite overlay = object.getOverlaySprite();
-            if (overlay != null) {
-                IsoSpriteInstance odef = overlay.def;
-                if (odef == null) return reject("overlayPart", overlay);
-                Texture otex = overlay.getTextureForCurrentFrame(object.getDir(), object);
-                if (otex == null || otex.getTextureId() == null) return reject("overlayPart", overlay);
-                Texture odepth = selectDepthTexture(overlay, object);
-                if (odepth == null || odepth.getTextureId() == null) return reject("overlayPart", overlay);
-                float ocr = liR * fade * fade;
-                float ocg = liG * fade * fade;
-                float ocb = liB * fade * fade;
-                float oFactor = liA;
-                ColorInfo osc = object.getOverlaySpriteColor();
-                if (osc != null) {
-                    ocr = osc.r * ownR * fade;
-                    ocg = osc.g * ownG * fade;
-                    ocb = osc.b * ownB * fade;
-                    oFactor = osc.a;
-                }
-                float oAlpha = alpha;
-                if (odef.copyTargetAlpha && oFactor != 1.0f) {
-                    oAlpha = alpha * oFactor;
-                }
-                float oScaleX = odef.scaleX;
-                float oScaleY = odef.scaleY;
-                int oWOrig = otex.getWidthOrig();
-                int oHOrig = otex.getHeightOrig();
-                if (Core.tileScale == 2 && oWOrig == 64 && oHOrig == 128) {
-                    oScaleX = 2.0f;
-                    oScaleY = 2.0f;
-                }
-                if (Core.tileScale == 2 && oScaleX == 2.0f && oScaleY == 2.0f && oWOrig == 128 && oHOrig == 256) {
-                    oScaleX = 1.0f;
-                    oScaleY = 1.0f;
-                }
-                if (oScaleX > 0.0f && oScaleY > 0.0f && oAlpha > 0.001f) {
-                    parts.add(buildPart(otex, odepth, overlay, baseSx, baseSy,
-                            oScaleX, oScaleY, oScaleX, oScaleY, odef.flip,
-                            zNear, zFar, ore, ocr, ocg, ocb, oAlpha));
-                }
-            }
-
-            for (int i = 0; i < attachedCount; ++i) {
-                IsoSpriteInstance s = attachments.get(i);
-                IsoSprite spr = s != null ? s.parentSprite : null;
-                if (spr == null) return reject("attachPart", sprite);
-                int frame = 0;
-                if (spr.hasAnimation()) {
-                    int frameCount = spr.getFrameCount();
-                    if (s.frame >= (float) frameCount) {
-                        frame = frameCount - 1;
-                    } else if (s.frame > 0.0f) {
-                        frame = (int) s.frame;
-                    }
-                }
-                Texture tex2 = spr.getTextureForFrame(frame, object.getDir(), object.isUseSnowSprite());
-                if (tex2 == null || tex2.getTextureId() == null) return reject("attachPart", spr);
-                Texture depthTex2 = selectDepthTexture(spr, object);
-                if (depthTex2 == null || depthTex2.getTextureId() == null) return reject("attachPart", spr);
-                float a2 = s.alpha;
-                if (s.multiplyObjectAlpha) {
-                    a2 *= alpha;
-                }
-                if (a2 <= 0.001f) continue;
-                float sX2 = s.scaleX;
-                float sY2 = s.scaleY;
-                int wOrig2 = tex2.getWidthOrig();
-                int hOrig2 = tex2.getHeightOrig();
-                if (Core.tileScale == 2 && wOrig2 == 64 && hOrig2 == 128) {
-                    sX2 = 2.0f;
-                    sY2 = 2.0f;
-                }
-                if (Core.tileScale == 2 && sX2 == 2.0f && sY2 == 2.0f && wOrig2 == 128 && hOrig2 == 256) {
-                    sX2 = 1.0f;
-                    sY2 = 1.0f;
-                }
-                if (sX2 <= 0.0f || sY2 <= 0.0f) continue;
-                // TileDepthModifier gets def scale for attachments, the
-                // quad itself uses the instance scale (vanilla asymmetry).
-                float uvSX = spr.def != null ? spr.def.scaleX : 1.0f;
-                float uvSY = spr.def != null ? spr.def.scaleY : 1.0f;
-                parts.add(buildPart(tex2, depthTex2, spr, baseSx, baseSy,
-                        sX2, sY2, uvSX, uvSY, s.flip,
-                        zNear, zFar, ore,
-                        liR * fade * s.tintr, liG * fade * s.tintg, liB * fade * s.tintb, a2));
-            }
-
-            // Every part bends in the main part's frame, so a flower child stays on
-            // its stalk.
-            if (windFrac > 0.0f) {
-                WindSwayGrassDrawer.GrassQuad main = parts.get(0);
-                float frameTop = main.oy;
-                float frameBottom = main.oy + main.h;
-                float frameLeft = main.ox;
-                float barrier = barrierCode(square);
-                // Lean with the wind, swing past upright only by the upwind cap
-                // (screen-right is downwind for dir > 0).
-                boolean right = TreeSway.dir >= 0.0;
-                for (int i = 0; i < parts.size(); ++i) {
-                    WindSwayGrassDrawer.GrassQuad q = parts.get(i);
-                    q.windS = windS;
-                    q.windSeed = windSeed;
-                    q.windPeriod = windPeriod;
-                    q.windAmp = q.w * windFrac;
-                    float down = plantPadOn ? TreeSway.plantReach(q.windAmp, true) : 0.0f;
-                    float up = plantPadOn ? TreeSway.plantReach(q.windAmp, false) : 0.0f;
-                    q.padL = right ? up : down;
-                    q.padR = right ? down : up;
-                    q.barrier = barrier;
-                    float tU = (q.u1 - q.u0) / q.w;
-                    float tV = (q.v1 - q.v0) / q.h;
-                    q.frameTop = q.v0 + (frameTop - q.oy) * tV;
-                    q.frameBottom = q.v0 + (frameBottom - q.oy) * tV;
-                    q.frameLeft = q.u0 + (frameLeft - q.ox) * tU;
-                }
-            }
-            // Canary: if the pass advice never drains us (weave failure),
-            // nothing captured ever gets drawn.
-            if (pendingQuads.size() > 100000) {
-                pendingQuads.clear();
-                pendBoundsValid = false;
-                WindSwayGrassDrawer.fail("pending batch overflowed, pass advice not running?");
-                return false;
-            }
-            for (int i = 0; i < parts.size(); ++i) {
-                WindSwayGrassDrawer.GrassQuad q = parts.get(i);
-                pendingQuads.add(q);
-                extendPendingBounds(q);
-            }
-            parts.clear();
-            // Object-picker click boxes; normally refilled by the draw
-            // we skip.
-            if (!WeatherFxMask.isRenderingMask()
-                    && !FBORenderObjectHighlight.getInstance().isRendering()
-                    && !FBORenderObjectOutline.getInstance().isRendering()) {
-                ObjectRenderInfo ri = object.getRenderInfo(playerIndex);
-                ri.renderX = pickerX;
-                ri.renderY = pickerY;
-                ri.renderWidth = wOrig * scaleX;
-                ri.renderHeight = hOrig * scaleY;
-                ri.renderScaleX = scaleX;
-                ri.renderScaleY = scaleY;
-                ri.renderAlpha = alpha;
-            }
-            // Vanilla advances attachment anims inside the skipped draw.
-            for (int i = 0; i < attachedCount; ++i) {
-                IsoSpriteInstance s = attachments.get(i);
-                if (s != null) {
-                    s.update();
-                }
-            }
-            stepAlphaLikeVanilla(object, square, playerIndex, target);
-            if (!firstCaptureLogged) {
-                firstCaptureLogged = true;
-                trace("first grass object captured: " + (sprite.name != null ? sprite.name : "?"));
-            }
-            return true;
-        } catch (Throwable t) {
-            if (!captureFailedLogged) {
-                captureFailedLogged = true;
-                trace("grass capture failed, falling back to vanilla draw", t);
-            }
-            return false;
-        }
-    }
-
-    private static final double SQRT2 = Math.sqrt(2.0);
-    // Game thread; the parts of one object between build and enqueue.
-    private static final ArrayList<WindSwayGrassDrawer.GrassQuad> partsScratch = new ArrayList<>(8);
-
-    // fencing_burnt_01 trunks carry MoveWithWind without a tree flag: not
-    // grass.
-    private static boolean rigidFlora(IsoSprite sprite) {
-        String name = sprite.name;
-        return name != null && name.startsWith("fencing_burnt");
-    }
-
-    // Own render overrides draw something other than the tile sprite
-    // (IsoMannequin: 3D model, IsoBarricade: swapped light and alpha);
-    // only IsoObject.render and its thin super.render wrappers are the
-    // path replicated here.
-    private static final HashMap<Class<?>, Boolean> renderViaIsoObject = new HashMap<>();
-
-    private static boolean rendersViaIsoObject(Class<?> cls) {
-        Boolean known = renderViaIsoObject.get(cls);
-        if (known != null) return known;
-        boolean result;
-        try {
-            Class<?> decl = cls.getMethod("render", float.class, float.class, float.class,
-                    ColorInfo.class, boolean.class, boolean.class, Shader.class).getDeclaringClass();
-            result = decl == IsoObject.class || decl == IsoThumpable.class || decl == IsoCurtain.class;
-        } catch (Throwable t) {
-            result = false;
-        }
-        renderViaIsoObject.put(cls, result);
-        return result;
-    }
-
-    // setupTileDepth's selection chain, reduced to the branches grass
-    // and its attachments can hit.
-    private static Texture selectDepthTexture(IsoSprite spr, IsoObject object) {
-        TileDepthTexture authored = spr.depthTexture;
-        if (authored != null && !authored.isEmpty()) {
-            return authored.getTexture();
-        }
-        if (spr.getProperties().has(IsoFlagType.solidfloor)
-                || spr.getProperties().has(IsoFlagType.FloorOverlay)
-                || spr.renderLayer == 1) {
-            return TileDepthMapManager.instance.getTextureForPreset(TileDepthMapManager.TileDepthPreset.Floor);
-        }
-        IsoSprite main = object.getSprite();
-        if (main != null && main != spr) {
-            boolean useParent = (spr.depthFlags & 1) != 0
-                    || spr.getProperties().has(IsoFlagType.WallOverlay)
-                    && (spr.getProperties().has(IsoFlagType.attachedN) || spr.getProperties().has(IsoFlagType.attachedW));
-            if (useParent && main.depthTexture != null && !main.depthTexture.isEmpty()) {
-                return main.depthTexture.getTexture();
-            }
-        }
-        TileDepthTexture def = TileDepthTextureManager.getInstance().getDefaultDepthTexture();
-        if (def != null && !def.isEmpty()) {
-            return def.getTexture();
-        }
-        return null;
-    }
-
-    // prepareToRenderSprite + performRenderFrame + Texture.render(ORE),
-    // reduced to the static screen-space case shared by the main sprite
-    // and its attachments.
-    private static WindSwayGrassDrawer.GrassQuad buildPart(
-            Texture tex, Texture depthTex, IsoSprite spr,
-            float baseSx, float baseSy, float scaleX, float scaleY,
-            float uvScaleX, float uvScaleY, boolean flip,
-            float zNear, float zFar, ObjectRenderEffects ore,
-            float r, float g, float b, float a) {
-        float sx = baseSx + spr.soffX;
-        float sy = baseSy + spr.soffY;
-        float width = tex.getWidth();
-        float height = tex.getHeight();
-        if (scaleX != 1.0f) {
-            sx += tex.getOffsetX() * (scaleX - 1.0f);
-            width *= scaleX;
-        }
-        if (scaleY != 1.0f) {
-            sy += tex.getOffsetY() * (scaleY - 1.0f);
-            height *= scaleY;
-        }
-
-        WindSwayGrassDrawer.GrassQuad q = new WindSwayGrassDrawer.GrassQuad();
-        q.tex = tex;
-        q.depthTex = depthTex;
-        q.ox = sx + tex.getOffsetX();
-        q.oy = sy + tex.getOffsetY();
-        q.w = width;
-        q.h = height;
-
-        q.u0 = tex.getXStart();
-        q.u1 = tex.getXEnd();
-        q.v0 = tex.getYStart();
-        q.v1 = tex.getYEnd();
-        if (flip) {
-            float t = q.u0;
-            q.u0 = q.u1;
-            q.u1 = t;
-        }
-
-        // TileDepthModifier.accept: sprite rect ∩ depth-map rect in
-        // tile pixel space, mapped into the depth page's UVs.
-        float ix0 = PZMath.max(spr.soffX + tex.getOffsetX() * uvScaleX, depthTex.getOffsetX());
-        float ix1 = PZMath.min(spr.soffX + (tex.getOffsetX() + (float) tex.getWidth()) * uvScaleX,
-                depthTex.getOffsetX() + (float) depthTex.getWidth());
-        float iy0 = PZMath.max(spr.soffY + tex.getOffsetY() * uvScaleY, depthTex.getOffsetY());
-        float iy1 = PZMath.min(spr.soffY + (tex.getOffsetY() + (float) tex.getHeight()) * uvScaleY,
-                depthTex.getOffsetY() + (float) depthTex.getHeight());
-        q.du0 = depthTex.getXStart() + (ix0 - depthTex.getOffsetX()) / depthTex.getWidthHW();
-        q.du1 = depthTex.getXStart() + (ix1 - depthTex.getOffsetX()) / depthTex.getWidthHW();
-        q.dv0 = depthTex.getYStart() + (iy0 - depthTex.getOffsetY()) / depthTex.getHeightHW();
-        q.dv1 = depthTex.getYStart() + (iy1 - depthTex.getOffsetY()) / depthTex.getHeightHW();
-
-        q.zNear = zNear;
-        q.zFar = zFar;
-
-        q.r = r;
-        q.g = g;
-        q.b = b;
-        if (debugTint) {
-            q.r = 1.0f;
-            q.g = 0.25f;
-            q.b = 0.25f;
-        }
-        q.a = a;
-
-        if (ore != null) {
-            q.ox1 = (float) ore.x1;
-            q.oy1 = (float) ore.y1;
-            q.ox2 = (float) ore.x2;
-            q.oy2 = (float) ore.y2;
-            q.ox3 = (float) ore.x3;
-            q.oy3 = (float) ore.y3;
-            q.ox4 = (float) ore.x4;
-            q.oy4 = (float) ore.y4;
-        }
-        return q;
-    }
-
-    private static int alphaStepFrame = -1;
-    private static float alphaStep;
-
-    // IsoObject.updateAlpha replica. The in/out asymmetry matters: a
-    // symmetric step snaps obscure fades around the player instead of
-    // melting them.
-    private static void stepAlphaLikeVanilla(IsoObject object, IsoGridSquare square, int playerIndex, float target) {
-        if (object.alphaForced) return;
-        if (object.neverDoneAlpha) {
-            object.setAlpha(0.0f);
-            object.neverDoneAlpha = false;
-        }
-        float mul = 0.25f;
-        if (square.getRoom() != null) {
-            mul *= 2.0f;
-        }
-        int fc = IsoCamera.frameState.frameCount;
-        if (fc != alphaStepFrame) {
-            alphaStepFrame = fc;
-            alphaStep = 0.28f * GameTime.getInstance().getMultiplier();
-        }
-        float step = alphaStep;
-        float alpha = object.getAlpha(playerIndex);
-        if (alpha < target) {
-            alpha = Math.min(target, alpha + step * mul);
-        } else if (alpha > target) {
-            alpha = Math.max(target, alpha - step / 14.0f);
-        }
-        object.setAlpha(playerIndex, alpha);
+        GrassCapture.wallCapture = on;
     }
 
     public static void onTranslucentPassDone(int playerIndex, int z) {
         try {
-            if (debugLog && !pendingQuads.isEmpty()) {
-                flushPass5s++;
-            }
-            flushPendingTrees(FLUSH_TREES_PASS);
-            flushPending();
+            long t0 = debugLog ? System.nanoTime() : 0L;
+            BatchSequencer.passDone();
             WindSwayGrassDrawer.onPassDone();
+            if (t0 != 0L) DebugStats.gtPassNs += System.nanoTime() - t0;
             IsoWorld world = IsoWorld.instance;
             if (world != lastWorld) {
                 lastWorld = world;
@@ -2082,107 +1052,7 @@ public class WindSwayMod {
             }
             if (!enabled) return;
 
-            if (debugLog) {
-                int fc = IsoCamera.frameState.frameCount;
-                if (fc != lastFrameCount) {
-                    lastFrameCount = fc;
-                    frames5s++;
-                }
-            }
-            long now = System.currentTimeMillis();
-            if (debugLog && now - lastWindLog > 5000L) {
-                lastWindLog = now;
-                trace(String.format("plantWind=%.3f raw=%.3f treeW=%.3f dir=%.2f poolX=%.3f rustleG=%.2f | flushes=%d quads=%d maxBatch=%d | alphaskip=%d",
-                        ClimateManager.getWindTickFinal(), TreeSway.raw, TreeSway.w, TreeSway.dir, TreeSway.lastX, lastRustleGain, flushCount5s, flushQuads5s, maxBatch5s, diagAlphaSkips));
-                trace(String.format("flush causes: door=%d obj=%d tree=%d passEnd=%d | gateSkips=%d | walls captured=%d | trees before grass=%d",
-                        flushDoor5s, flushObj5s, flushTree5s, flushPass5s, gateSkip5s, wallsCaptured5s, flushOrder5s));
-                wallsCaptured5s = 0;
-                flushOrder5s = 0;
-                trace(String.format("trees: lists=%d trees=%d draws=%d binds=%d maxList=%d",
-                        TreeRenderer.diagRenders, TreeRenderer.diagTrees, TreeRenderer.diagDraws, TreeRenderer.diagBinds,
-                        TreeRenderer.diagMaxTrees));
-                TreeRenderer.diagBinds = 0;
-                trace(String.format("tree merge: held=%d merged=%d | flush obj=%d see=%d passEnd=%d | gateSkips=%d | trees/flush=%.1f max=%d | see lists: stencil=%d transp=%d fade=%d cut=%d",
-                        held5s, merged5s, treeFlushObj5s, treeFlushSee5s, treeFlushPass5s, treeGateSkip5s,
-                        mergedTrees5s / (double) Math.max(1, treeFlushObj5s + treeFlushSee5s + treeFlushPass5s), mergedMax5s,
-                        seeStencil5s, seeTransp5s, seeFade5s, seeCut5s));
-                trace(String.format("see skip: noRect=%d noBbox=%d noQuad=%d of %d lists",
-                        seeSkipRect5s, seeSkipBbox5s, seeSkipQuad5s, seeLists5s));
-                seeLists5s = 0;
-                seeSkipRect5s = 0;
-                seeSkipBbox5s = 0;
-                seeSkipQuad5s = 0;
-                seeStencil5s = 0;
-                seeTransp5s = 0;
-                seeFade5s = 0;
-                seeCut5s = 0;
-                held5s = 0;
-                merged5s = 0;
-                treeFlushObj5s = 0;
-                treeFlushSee5s = 0;
-                treeFlushPass5s = 0;
-                treeGateSkip5s = 0;
-                mergedTrees5s = 0;
-                mergedMax5s = 0;
-                int frames = Math.max(1, frames5s);
-                trace(String.format("gpu: trees %s | grass %s | frames=%d",
-                        TreeRenderer.gpuTimer.report(frames), WindSwayGrassDrawer.gpuTimer.report(frames), frames5s));
-                long grassNs = WindSwayGrassDrawer.cpuNs.getAndSet(0L);
-                long grassFillNs = WindSwayGrassDrawer.cpuFillNs.getAndSet(0L);
-                long grassRuns = WindSwayGrassDrawer.diagRuns.getAndSet(0L);
-                long grassBinds = WindSwayGrassDrawer.diagBinds.getAndSet(0L);
-                trace(String.format("cpu (render thread): tree build %.3f draw %.3f ms/frame | grass batch %.3f ms/frame (fill %.3f, gl %.3f, runs/batch %.1f, binds/batch %.1f) | depth atlas cells %d/%d copies %d evictions %d",
-                        TreeRenderer.cpuBuildNs.getAndSet(0L) / 1.0e6 / frames,
-                        TreeRenderer.cpuDrawNs.getAndSet(0L) / 1.0e6 / frames,
-                        grassNs / 1.0e6 / frames,
-                        grassFillNs / 1.0e6 / frames,
-                        (grassNs - grassFillNs) / 1.0e6 / frames,
-                        grassRuns / (double) Math.max(1, flushCount5s),
-                        grassBinds / (double) Math.max(1, flushCount5s),
-                        DepthAtlas.diagCells, DepthAtlas.diagCapacity, DepthAtlas.diagCopies, DepthAtlas.diagEvictions));
-                DepthAtlas.diagCopies = 0;
-                DepthAtlas.diagEvictions = 0;
-                double perBatch = 1.0e3 / Math.max(1, flushCount5s);
-                trace(String.format("grass gl per batch (us): timer %.2f state %.2f upload %.2f attrib %.2f prog %.2f draw %.2f end %.2f",
-                        WindSwayGrassDrawer.cpuTimerNs.getAndSet(0L) * perBatch / 1.0e6,
-                        WindSwayGrassDrawer.cpuStateNs.getAndSet(0L) * perBatch / 1.0e6,
-                        WindSwayGrassDrawer.cpuUploadNs.getAndSet(0L) * perBatch / 1.0e6,
-                        WindSwayGrassDrawer.cpuAttribNs.getAndSet(0L) * perBatch / 1.0e6,
-                        WindSwayGrassDrawer.cpuProgNs.getAndSet(0L) * perBatch / 1.0e6,
-                        WindSwayGrassDrawer.cpuDrawNs.getAndSet(0L) * perBatch / 1.0e6,
-                        WindSwayGrassDrawer.cpuEndNs.getAndSet(0L) * perBatch / 1.0e6));
-                frames5s = 0;
-                TreeRenderer.diagRenders = 0;
-                TreeRenderer.diagTrees = 0;
-                TreeRenderer.diagDraws = 0;
-                TreeRenderer.diagMaxTrees = 0;
-                flushDoor5s = 0;
-                flushObj5s = 0;
-                flushTree5s = 0;
-                flushPass5s = 0;
-                gateSkip5s = 0;
-                while (flushSeenPrinted < flushSeen.size()) {
-                    trace("flush trigger: " + flushSeen.get(flushSeenPrinted));
-                    flushSeenPrinted++;
-                }
-                flushCount5s = 0;
-                flushQuads5s = 0;
-                maxBatch5s = 0;
-                diagAlphaSkips = 0;
-                if (!rejectCounts.isEmpty()) {
-                    StringBuilder sb = new StringBuilder("rejects:");
-                    for (Map.Entry<String, Integer> e : rejectCounts.entrySet()) {
-                        sb.append(' ').append(e.getKey()).append('=').append(e.getValue());
-                    }
-                    trace(sb.toString());
-                    rejectCounts.clear();
-                }
-                while (rejectSeenPrinted < rejectSeen.size()) {
-                    trace("reject sprite: " + rejectSeen.get(rejectSeenPrinted));
-                    rejectSeenPrinted++;
-                }
-            }
-
+            DebugStats.onPassEnd();
         } catch (Throwable t) {
             if (!enqueueFailedLogged) {
                 enqueueFailedLogged = true;
