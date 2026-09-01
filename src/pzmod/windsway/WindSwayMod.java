@@ -58,20 +58,20 @@ public class WindSwayMod {
     // The baseline slider: one remap base for the plant channel
     // (getWindTickFinal, Patch_ClimateManager) and the tree channel
     // (TreeSway). Vanilla wind sits near zero for hours on calm days.
-    public static volatile double windFloor = 0.3;
+    public static volatile double windFloor = 0.2;
 
     public static void setWindFloor(double v) {
         windFloor = v;
     }
 
-    public static volatile double treeWindFloor = 0.3;
+    public static volatile double treeWindFloor = 0.2;
 
     public static void setTreeWindFloor(double v) {
         treeWindFloor = v;
     }
 
     // Upper bound of the calm-wind band, shared by both channels.
-    public static volatile double windCeil = 0.55;
+    public static volatile double windCeil = 0.4;
 
     public static void setWindCeil(double v) {
         windCeil = v;

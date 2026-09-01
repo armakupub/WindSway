@@ -82,10 +82,13 @@ windPresetOpt = modOptions:addComboBox(
     "The mod's own wind while the game's weather is idle. Vanilla = the game's wind only. Custom uses the two sliders below.")
 windPresetOpt:addItem("Vanilla")
 windPresetOpt:addItem("Calm")
-windPresetOpt:addItem("Normal")
-windPresetOpt:addItem("Windy", true)
+windPresetOpt:addItem("Normal", true)
+windPresetOpt:addItem("Windy")
 windPresetOpt:addItem("Custom")
+-- Apply fires before the screen stores the new value; getValue() in the
+-- callback still reads the old one.
 windPresetOpt.onChangeApply = function(self, selected)
+    self:setValue(selected)
     applyBand()
 end
 
@@ -98,6 +101,7 @@ windFloorOpt = modOptions:addSlider(
     0.2,
     "Only with Custom. Both sliders 0 = vanilla wind.")
 windFloorOpt.onChangeApply = function(self, value)
+    self:setValue(value)
     applyBand()
 end
 
@@ -108,6 +112,7 @@ windCeilOpt = modOptions:addSlider(
     0.85,
     "Only with Custom. At or below the minimum: a steady wind at the minimum.")
 windCeilOpt.onChangeApply = function(self, value)
+    self:setValue(value)
     applyBand()
 end
 

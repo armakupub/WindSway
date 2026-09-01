@@ -58,7 +58,7 @@ Everything sits under Options → Mods → Wind Sway.
 | Setting | Default | What it does |
 |---|---|---|
 | Enable Wind Sway | on | Master switch: turns on the game's wind path and draws swaying vegetation with the mod's own renderer. Off = back to your vanilla settings. |
-| Wind | Windy | The mod's own wind while the game's weather is idle: Vanilla (game wind only), Calm, Normal, Windy, or Custom. |
+| Wind | Normal | The mod's own wind while the game's weather is idle: Vanilla (game wind only), Calm, Normal, Windy, or Custom. |
 | Minimum wind (custom) | 0–1, 0.2 | Lower edge of the custom band. Both sliders 0 = vanilla wind. |
 | Maximum wind (custom) | 0–1, 0.85 | Upper edge. At or below the minimum: a steady wind at the minimum. |
 | Weather overrides the wind setup | on | During rain, fog and storms the game's wind rules, even below the band. Off: the band stays as a floor. |

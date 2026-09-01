@@ -1,6 +1,10 @@
 Wind Sway - Changelog
 =====================
 
+0.4.1 - 2026-09-01
+  - Fixed: the wind options only took effect after a game restart.
+  - The wind now defaults to Normal.
+
 0.4.0 - 2026-09-01
   - Trees move by species: crown, branch and leaf traits come from the sprite family; hollies bounce their tiers, dogwood stirs in layers, maples carry a dense crown.
   - Plants move by class and bushes by species: woody bushes bend as stem and crown, ferns bob their fronds, dead crops sway as dry stems, flower spikes nod. Their leaves flutter and flicker in patches like tree leaves; snow-laden flora is damped.
