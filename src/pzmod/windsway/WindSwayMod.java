@@ -986,6 +986,7 @@ public class WindSwayMod {
         firstTreeScaleLogged = false;
         enqueueFailedLogged = false;
         TreeRenderer.pageMissLogged = 0;
+        GlTrace.requestDump();
     }
 
     private static IsoWorld lastWorld;
@@ -1012,6 +1013,13 @@ public class WindSwayMod {
 
     public static void setDebugLog(boolean v) {
         debugLog = v;
+    }
+
+    // Console: the engine's state trackers against GL around every draw of
+    // ours, and the raw state a draw left changed.
+    public static void setDebugGlTrace(boolean v) {
+        GlTrace.enabled = v;
+        if (v) GlTrace.requestDump();
     }
 
     public static void setTreeLod(double px) {
@@ -1054,6 +1062,28 @@ public class WindSwayMod {
 
     private static volatile boolean enqueueFailedLogged = false;
 
+    // Render thread: GL errors the probes caught.
+    static int glErrors;
+
+    private static long heartbeatMs;
+
+    // Every five minutes one line with what a truncated console.txt loses:
+    // the GPU and the counters that name a failing part.
+    private static void heartbeat() {
+        long now = System.currentTimeMillis();
+        if (heartbeatMs == 0L) {
+            heartbeatMs = now - 240000L;
+            return;
+        }
+        if (now - heartbeatMs < 300000L) return;
+        heartbeatMs = now;
+        trace("status: " + TreeRenderer.glInfo + " | enabled=" + enabled
+                + " | trees " + TreeRenderer.statusLine()
+                + " | grass " + WindSwayGrassDrawer.statusLine()
+                + " | atlas " + DepthAtlas.statusLine()
+                + " | glErrors=" + glErrors);
+    }
+
     public static void setFlushPrecise(boolean v) {
         BatchSequencer.flushPrecise = v;
     }
@@ -1077,6 +1107,7 @@ public class WindSwayMod {
                 rearm();
                 warmUp();
             }
+            heartbeat();
             if (!enabled) return;
 
             DebugStats.onPassEnd();
@@ -1105,7 +1136,9 @@ public class WindSwayMod {
         int end() {
             samples++;
             lastMs = System.currentTimeMillis();
-            return GL11.glGetError();
+            int err = GL11.glGetError();
+            if (err != GL11.GL_NO_ERROR) ++glErrors;
+            return err;
         }
 
         void reset() {

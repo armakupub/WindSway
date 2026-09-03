@@ -16,6 +16,7 @@ import org.lwjglx.opengl.Display;
 
 import zombie.core.SpriteRenderer;
 import zombie.core.opengl.GLStateRenderThread;
+import zombie.core.opengl.IShaderProgramListener;
 import zombie.core.opengl.ShaderProgram;
 import zombie.core.skinnedmodel.model.VertexBufferObject;
 import zombie.core.skinnedmodel.shader.Shader;
@@ -218,6 +219,20 @@ public class WindSwayGrassDrawer extends TextureDraw.GenericDrawer {
     private static final int[] unitBound = new int[2 * MAX_SLOTS];
     static final AtomicLong diagRuns = new AtomicLong();
     static final AtomicLong diagBinds = new AtomicLong();
+    // Render thread, cumulative: quads dropped for a page without a GL
+    // texture, binds that fell back to the engine's error texture, segments drawn.
+    static int diagPageMiss;
+    static int diagErrorTex;
+    static int totalSegments;
+
+    static String statusLine() {
+        return "state=" + state + " program=" + programId + " segments=" + totalSegments
+                + " pageMiss=" + diagPageMiss + " errorTex=" + diagErrorTex + " slots=" + maxSlots;
+    }
+
+    // A recompile keeps the Shader object and may reuse the GL name: the
+    // locations and sampler units are looked up again either way.
+    private static final IShaderProgramListener ON_COMPILE = p -> programId = 0;
 
     private static final class Run {
         final TextureID[] diffuse = new TextureID[MAX_SLOTS];
@@ -599,6 +614,7 @@ public class WindSwayGrassDrawer extends TextureDraw.GenericDrawer {
             }
             if (shader == null) {
                 shader = ShaderManager.instance.getOrCreateShader("windsway_grass", true, false);
+                shader.getShaderProgram().addCompileListener(ON_COMPILE);
             }
             ShaderProgram program = shader.getShaderProgram();
             if (!program.isCompiled() && !WindSwayMod.recompileShaderWithLog(program)) {
@@ -628,6 +644,7 @@ public class WindSwayGrassDrawer extends TextureDraw.GenericDrawer {
             }
             if (this.quads.isEmpty()) return;
             glSection = true;
+            GlTrace.begin("grass segment");
             if (!built) {
                 build(diag, t0);
             }
@@ -760,6 +777,8 @@ public class WindSwayGrassDrawer extends TextureDraw.GenericDrawer {
             shader.End();
             teardown(withVao);
             tornDown = true;
+            ++totalSegments;
+            GlTrace.end("grass segment");
             if (timed) {
                 gpuTimer.end();
                 timed = false;
@@ -785,7 +804,10 @@ public class WindSwayGrassDrawer extends TextureDraw.GenericDrawer {
             fail(t);
         } finally {
             if (timed) gpuTimer.end();
-            if (glSection && !tornDown) teardown(withVao);
+            if (glSection && !tornDown) {
+                teardown(withVao);
+                GlTrace.end("grass segment (failed)");
+            }
         }
     }
 
@@ -849,6 +871,13 @@ public class WindSwayGrassDrawer extends TextureDraw.GenericDrawer {
             if (q.depthTex == null || q.depthTex.getTextureId() == null) continue;
             TextureID diffuse = q.tex.getTextureId();
             TextureID depth = q.depthTex.getTextureId();
+            // No GL texture yet (or gone): vanilla's bind would show the
+            // engine's red-white error texture, the capture rejects these a
+            // frame earlier; anything that slips through is dropped.
+            if (diffuse.getID() == -1 || depth.getID() == -1) {
+                ++diagPageMiss;
+                continue;
+            }
             DepthAtlas.Cell cell = atlasOn ? DepthAtlas.cellFor(q.depthTex) : null;
             // Rewritten in place into atlas space: a quad is built once,
             // then recycled.
@@ -955,7 +984,10 @@ public class WindSwayGrassDrawer extends TextureDraw.GenericDrawer {
             return unit;
         }
         if (active != unit) GL13.glActiveTexture(GL13.GL_TEXTURE0 + unit);
-        if (id == -1) id = TreeRenderer.ensureId(tex);
+        if (id == -1) {
+            id = TreeRenderer.ensureId(tex);
+            if (tex.getID() == -1) ++diagErrorTex;
+        }
         GL11.glBindTexture(GL11.GL_TEXTURE_2D, id);
         if (nearest) TreeRenderer.nearestAlways();
         unitBound[unit] = id;

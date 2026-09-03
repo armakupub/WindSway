@@ -3,6 +3,6 @@ id=WindSway
 description=Trees, grass and bushes sway with the wind, from light breeze to storm.
 require=ZombieBuddy
 incompatible=WindTreeSway
-modversion=0.4.2
+modversion=0.4.3
 poster=poster.png
 icon=icon.png

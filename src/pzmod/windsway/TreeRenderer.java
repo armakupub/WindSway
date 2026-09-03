@@ -25,6 +25,7 @@ import zombie.core.Core;
 import zombie.core.SpriteRenderer;
 import zombie.core.math.PZMath;
 import zombie.core.opengl.GLStateRenderThread;
+import zombie.core.opengl.IShaderProgramListener;
 import zombie.core.opengl.ShaderProgram;
 import zombie.core.skinnedmodel.model.VertexBufferObject;
 import zombie.core.skinnedmodel.shader.Shader;
@@ -288,6 +289,19 @@ public final class TreeRenderer {
     private static final WindSwayMod.GlProbe glProbe = new WindSwayMod.GlProbe();
     private static volatile boolean rearmRequested;
     private static volatile boolean clearRequested;
+    static String glInfo = "GL: ?";
+    // Render thread, cumulative for the status line.
+    static int totalLists;
+    static int totalPageMiss;
+
+    static String statusLine() {
+        return "ok=" + ok + " warp=" + warp + " program=" + programId + " lists=" + totalLists
+                + " pageMiss=" + totalPageMiss + " leafMask=" + LeafMaskAtlas.active();
+    }
+
+    // A recompile keeps the Shader object and may reuse the GL name: the
+    // locations and sampler units are looked up again either way.
+    private static final IShaderProgramListener ON_COMPILE = p -> programId = 0;
 
     // Game thread. After a latch: init again, once per new world or on
     // request from the console. The shader is the render thread's, it
@@ -702,15 +716,18 @@ public final class TreeRenderer {
             throw new IllegalStateException("windsway_tree shader not compiled");
         }
         programId = program.getShaderID();
+        program.addCompileListener(ON_COMPILE);
         lookupUniforms();
         LeafMaskAtlas.ensure();
         if (!glInfoLogged) {
             glInfoLogged = true;
-            WindSwayMod.trace("GL: " + GL11.glGetString(GL11.GL_RENDERER)
+            glInfo = "GL: " + GL11.glGetString(GL11.GL_RENDERER)
+                    + ", " + GL11.glGetString(GL11.GL_VERSION)
                     + ", max varying floats " + GL11.glGetInteger(GL20.GL_MAX_VARYING_FLOATS)
                     + ", max vertex attribs " + GL11.glGetInteger(GL20.GL_MAX_VERTEX_ATTRIBS)
                     + ", max texture units " + GL11.glGetInteger(GL20.GL_MAX_TEXTURE_IMAGE_UNITS)
-                    + ", timer queries " + (GpuTimer.supported() ? "yes" : "no"));
+                    + ", timer queries " + (GpuTimer.supported() ? "yes" : "no");
+            WindSwayMod.trace(glInfo);
         }
     }
 
@@ -1313,6 +1330,7 @@ public final class TreeRenderer {
         boolean withVao = useVao && vaoOk();
         boolean timed = false;
         boolean pushed = false;
+        GlTrace.begin("tree list");
         try {
             Matrix4f p = Core.getInstance().projectionMatrixStack.alloc();
             p.set(proj);
@@ -1376,6 +1394,10 @@ public final class TreeRenderer {
             }
 
             int pid = program.getShaderID();
+            if (pid == 0) {
+                fail("tree shader program gone");
+                return;
+            }
             if (pid != programId) {
                 programId = pid;
                 lookupUniforms();
@@ -1547,6 +1569,8 @@ public final class TreeRenderer {
             Texture.lastTextureID = -1;
             SpriteRenderer.ringBuffer.restoreVbos = true;
             SpriteRenderer.ringBuffer.restoreBoundTextures = true;
+            ++totalLists;
+            GlTrace.end("tree list");
         }
     }
 
@@ -1568,6 +1592,7 @@ public final class TreeRenderer {
                 if (!bindNearest(run.tex)) {
                     bound = null;
                     diagPageMiss++;
+                    ++totalPageMiss;
                     if (pageMissLogged < 40) {
                         ++pageMissLogged;
                         String path = run.tex.getPath() != null ? String.valueOf(run.tex.getPath().getPath()) : "?";

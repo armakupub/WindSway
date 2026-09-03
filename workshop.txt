@@ -33,15 +33,8 @@ description=[list]
 description=[*]Safe to add or remove mid-save, the mod stores nothing in the save.
 description=[/list]
 description=
-description=[h1]Multiplayer / dedicated servers[/h1]
-description=Wind Sway is client-side: the server runs none of its code, each player only sees the effect on their own screen. Two things still have to be in place:
-description=
-description=[list]
-description=[*][b]On the server[/b]: both mods go into the server's .ini, so joining clients download and enable them (keep your other entries, separate with semicolons; 3619862853 = ZombieBuddy, 3782670683 = Wind Sway):
-description=[code]Mods=ZombieBuddy;WindSway
-description=WorkshopItems=3619862853;3782670683[/code]
-description=[*][b]On every player's PC[/b]: ZombieBuddy's one-time setup from its Workshop page. The server can't do that part for you.
-description=[/list]
+description=[h1]Multiplayer[/h1]
+description=Not supported for now: render glitches were reported on servers that don't show in single player. If you play on a server anyway and trees or bushes look wrong, please report at [url=https://github.com/armakupub/WindSway/issues]github.com/armakupub/WindSway/issues[/url] with the console.txt of that session. Since 0.4.3 it carries a status line every few minutes that tells me what the renderer was doing.
 description=
 description=[h1]FAQ[/h1]
 description=

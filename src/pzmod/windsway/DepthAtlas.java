@@ -9,6 +9,7 @@ import org.lwjgl.opengl.GL11;
 import org.lwjgl.opengl.GL12;
 import org.lwjgl.opengl.GL30;
 import org.lwjgl.opengl.GL43;
+import org.lwjgl.opengl.GL45;
 import org.lwjgl.opengl.GLCapabilities;
 import org.lwjgl.system.MemoryUtil;
 import org.lwjglx.opengl.Display;
@@ -42,6 +43,7 @@ final class DepthAtlas {
         int srcId = -1;
         int readyTick;
         int tries;
+        int waits;
         boolean copied;
         // Copies kept failing: unusable until recycled.
         boolean dead;
@@ -90,6 +92,18 @@ final class DepthAtlas {
     static volatile int diagCells;
     static volatile int diagCapacity;
     static volatile int diagEvictions;
+    static volatile int diagDead;
+    static volatile int diagCopyFail;
+    private static int dsa = -1;
+    // Rounds a claimed cell waits for the engine's R8 upload before it is
+    // given up: the placeholder of an empty map never turns into one.
+    private static final int MAX_WAITS = 40;
+
+    static String statusLine() {
+        return (mode == MODE_OFF ? "off" : mode == MODE_COPY_IMAGE ? "copy_image" : "blit")
+                + " cells=" + diagCells + "/" + diagCapacity + " dead=" + diagDead
+                + " copyFail=" + diagCopyFail + " evict=" + diagEvictions;
+    }
 
     // One-texel gutter between cells.
     private static int pitchX() {
@@ -142,6 +156,18 @@ final class DepthAtlas {
             TextureID id = c.source.getTextureId();
             int src = id != null ? id.getID() : -1;
             if (src == -1) continue;
+            // Still the TextureID's RGBA placeholder: the R8 upload has not
+            // run. copy_image rejects it, a blit would freeze it in the cell.
+            if (!redFormat(src)) {
+                if (++c.waits >= MAX_WAITS) {
+                    c.dead = true;
+                    ++diagDead;
+                    pending.remove(i);
+                } else {
+                    c.readyTick = tick + READY_TICKS;
+                }
+                continue;
+            }
             if (round.isEmpty()) {
                 while (GL11.glGetError() != GL11.GL_NO_ERROR) {
                 }
@@ -166,12 +192,14 @@ final class DepthAtlas {
             c.copied = false;
             if (round.size() == 1 && ++c.tries >= MAX_TRIES) {
                 c.dead = true;
+                ++diagDead;
             } else {
                 c.readyTick = tick + READY_TICKS;
                 pending.add(c);
             }
         }
         retrySingly = true;
+        ++diagCopyFail;
         if (!copyFailLogged) {
             copyFailLogged = true;
             WindSwayMod.trace("depth atlas copy failed, GL error 0x" + Integer.toHexString(err)
@@ -251,12 +279,33 @@ final class DepthAtlas {
         c.copied = false;
         c.dead = false;
         c.tries = 0;
+        c.waits = 0;
         c.readyTick = tick + READY_TICKS;
         pending.add(c);
         if (WindSwayMod.debugLog) {
             WindSwayMod.trace("depth atlas cell claimed for " + c.source.getName()
                     + " at frame " + IsoCamera.frameState.frameCount);
         }
+    }
+
+    // Internal format of the source map. The engine specifies a
+    // TileDepthTexture twice: the TextureID's RGBA placeholder, then the
+    // GL_RED data in a queued upload.
+    private static boolean redFormat(int tex) {
+        if (dsa < 0) {
+            GLCapabilities caps = Display.capabilities;
+            dsa = caps.OpenGL45 || caps.GL_ARB_direct_state_access ? 1 : 0;
+        }
+        int fmt;
+        if (dsa == 1) {
+            fmt = GL45.glGetTextureLevelParameteri(tex, 0, GL11.GL_TEXTURE_INTERNAL_FORMAT);
+        } else {
+            int prev = GL11.glGetInteger(GL11.GL_TEXTURE_BINDING_2D);
+            GL11.glBindTexture(GL11.GL_TEXTURE_2D, tex);
+            fmt = GL11.glGetTexLevelParameteri(GL11.GL_TEXTURE_2D, 0, GL11.GL_TEXTURE_INTERNAL_FORMAT);
+            GL11.glBindTexture(GL11.GL_TEXTURE_2D, prev);
+        }
+        return fmt == GL11.GL_RED || fmt == GL30.GL_R8 || fmt == GL11.GL_LUMINANCE || fmt == GL11.GL_LUMINANCE8;
     }
 
     private static void init() {

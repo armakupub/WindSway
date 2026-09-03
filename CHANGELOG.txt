@@ -1,6 +1,12 @@
 Wind Sway - Changelog
 =====================
 
+0.4.3 - 2026-09-03
+  - Multiplayer is not supported for now: render glitches were reported on servers that do not show in single player. Reports with console.txt are welcome.
+  - Hardened the renderers: a page without a GL texture yet stays with vanilla for that frame instead of drawing the engine's error texture; a recompiled shader gets its uniforms and sampler units looked up again; the tree pass stops on a lost program; the depth atlas copies a map only once its depth data is uploaded.
+  - Diagnostics: a status line in console.txt every five minutes (GPU, renderer state, counters) and the console command WindSwayMod.setDebugGlTrace(true), which checks the GL state around every draw of the mod.
+  - Thanks to Patzzzz and gibra for the reports.
+
 0.4.2 - 2026-09-03
   - The weather override now yields only to rain, fog and storms. A dry front no longer silences the breeze.
   - Fixed: leaving a game that had the mod enabled only in its save could switch the game's own "Wind Sprite Effects" on for good and keep the renderer running without the mod.

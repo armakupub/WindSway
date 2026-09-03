@@ -194,8 +194,10 @@ public final class GrassCapture {
             if (inst == null) return DebugStats.reject("noDef", sprite);
             Texture tex = sprite.getTextureForCurrentFrame(cutN ? IsoDirections.N : IsoDirections.W, object);
             if (tex == null || tex.getTextureId() == null) return DebugStats.reject("noTex", sprite);
+            if (tex.getTextureId().getID() == -1) return DebugStats.reject("pageMiss", sprite);
             Texture depthTex = selectWallDepthTexture(sprite, cutN);
             if (depthTex == null || depthTex.getTextureId() == null) return DebugStats.reject("noDepthTex", sprite);
+            if (depthTex.getTextureId().getID() == -1) return DebugStats.reject("pageMiss", sprite);
 
             int wOrig = tex.getWidthOrig();
             int hOrig = tex.getHeightOrig();
@@ -501,8 +503,13 @@ public final class GrassCapture {
             if (inst == null) return DebugStats.reject("noDef", sprite);
             Texture tex = sprite.getTextureForCurrentFrame(object.getDir(), object);
             if (tex == null || tex.getTextureId() == null) return DebugStats.reject("noTex", sprite);
+            // A page without a GL texture yet draws as the engine's red-white
+            // error texture through a raw bind: vanilla draws it this frame
+            // and uploads it on the way.
+            if (tex.getTextureId().getID() == -1) return DebugStats.reject("pageMiss", sprite);
             Texture mainDepthTex = selectDepthTexture(sprite, object);
             if (mainDepthTex == null || mainDepthTex.getTextureId() == null) return DebugStats.reject("noDepthTex", sprite);
+            if (mainDepthTex.getTextureId().getID() == -1) return DebugStats.reject("pageMiss", sprite);
 
             int wOrig = tex.getWidthOrig();
             int hOrig = tex.getHeightOrig();
@@ -678,9 +685,11 @@ public final class GrassCapture {
                 if ((overlay.depthFlags & 4) != 0) return DebugStats.reject("opaque", overlay);
                 Texture otex = overlay.getTextureForCurrentFrame(object.getDir(), object);
                 if (otex == null || otex.getTextureId() == null) return DebugStats.reject("overlayPart", overlay);
+                if (otex.getTextureId().getID() == -1) return DebugStats.reject("pageMiss", overlay);
                 Texture odepth = selectDepthTexture(overlay, object);
                 if (odepth == null) return DebugStats.reject(wallDepth(overlay) ? "wallDepth" : "overlayPart", overlay);
                 if (odepth.getTextureId() == null) return DebugStats.reject("overlayPart", overlay);
+                if (odepth.getTextureId().getID() == -1) return DebugStats.reject("pageMiss", overlay);
                 float ocr = liR * fade * fade;
                 float ocg = liG * fade * fade;
                 float ocb = liB * fade * fade;
@@ -728,9 +737,11 @@ public final class GrassCapture {
                 if ((spr.depthFlags & 4) != 0) return DebugStats.reject("opaque", spr);
                 Texture tex2 = spr.getTextureForFrame(frame, object.getDir(), object.isUseSnowSprite());
                 if (tex2 == null || tex2.getTextureId() == null) return DebugStats.reject("attachPart", spr);
+                if (tex2.getTextureId().getID() == -1) return DebugStats.reject("pageMiss", spr);
                 Texture depthTex2 = selectDepthTexture(spr, object);
                 if (depthTex2 == null) return DebugStats.reject(wallDepth(spr) ? "wallDepth" : "attachPart", spr);
                 if (depthTex2.getTextureId() == null) return DebugStats.reject("attachPart", spr);
+                if (depthTex2.getTextureId().getID() == -1) return DebugStats.reject("pageMiss", spr);
                 // IsoSpriteInstance.renderprep runs inside the draw we skip:
                 // a copyTargetAlpha instance takes the object's alpha every
                 // frame, the others step toward their own target. Read raw,

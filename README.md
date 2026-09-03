@@ -36,18 +36,9 @@ On first launch ZombieBuddy asks whether to load Wind Sway's JAR, tick Allow.
 
 - Safe to add or remove mid-save, the mod stores nothing in the save.
 
-## Multiplayer / dedicated servers
+## Multiplayer
 
-Wind Sway is client-side: the server runs none of its code, each player only sees the effect on their own screen. Two things still have to be in place:
-
-- **On the server**: both mods go into the server's `.ini`, so joining clients download and enable them (keep your other entries, separate with semicolons; `3619862853` = ZombieBuddy, `3782670683` = Wind Sway):
-
-  ```ini
-  Mods=ZombieBuddy;WindSway
-  WorkshopItems=3619862853;3782670683
-  ```
-
-- **On every player's PC**: ZombieBuddy's one-time setup from its Workshop page. The server can't do that part for you.
+Not supported for now: render glitches were reported on servers that don't show in single player. If you play on a server anyway and trees or bushes look wrong, please report at [github.com/armakupub/WindSway/issues](https://github.com/armakupub/WindSway/issues) with the console.txt of that session. Since 0.4.3 it carries a status line every few minutes that tells me what the renderer was doing.
 
 ## Settings
 
