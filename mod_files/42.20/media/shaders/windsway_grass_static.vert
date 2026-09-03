@@ -22,7 +22,7 @@ layout (location = 5) in vec4 aWind;
 layout (location = 6) in vec4 aRect;
 // diffuse uv per sprite pixel (x signed by flip), depth uv per sprite pixel
 layout (location = 7) in vec4 aTexel;
-// object frame in this part's uv: content top v, bottom v, left u; w: seed
+// object frame in this part's uv: content top v, bottom v, left u; w: barrier bits, page slot pair
 layout (location = 8) in vec4 aFrame;
 // leaf flutter of this part: amplitude x, y (sprite px at the wind), cell px, rate factor
 layout (location = 9) in vec4 aClass;
@@ -354,7 +354,7 @@ void main (void)
 		float gustF = fl + (1.0 - fl) * g;
 		float lrate = aClass.w * (1.0 - uLeafP.w + 2.0 * uLeafP.w * hLeaf);
 		vLeafP = vec4(aClass.x * gustF, aClass.y * gustF, aClass.z, lrate);
-		vLeafM = vec4(aClass5.y, aClass5.x, 0.0, 0.0);
+		vLeafM = vec4(aClass5.y, aClass5.x, aWind.y, 0.0);
 		vClass2.z = g;
 		vClass2.w = hLeaf;
 	}

@@ -59,7 +59,7 @@ varying vec4 vLeafP;   // x, y: leaf flutter amplitude (sprite px, local wind ap
 varying vec4 vClass2;  // x: bend exponent factor, y: blade spread factor, z: local wind, w: leaf phase offset
 varying vec4 vGust;    // x: gust sheen -1..1 (class factor applied), y: tip physics factor of the class, z: ring one sample back (model 1), w: flutter amplitude px (model 1)
 varying vec4 vBody;    // x: stem-and-block profile share, y: lobe amplitude of this part (sprite px, local wind applied), z: lobe phase of the object
-varying vec4 vLeafM;   // x: mask share of this part, y: flicker amplitude (brightness, 0 = none)
+varying vec4 vLeafM;   // x: mask share of this part, y: flicker amplitude (brightness, 0 = none), z: object seed
 
 float hash1(float p)
 {
@@ -160,6 +160,20 @@ float vnoise(vec2 p)
 	           mix(hash2(i + vec2(0.0, 1.0)), hash2(i + vec2(1.0, 1.0)), f.x), f.y);
 }
 
+// Lattice periodic in 64 x 24 cells: the mask clock wraps at 64 with a
+// drift of 3/8 across, so the field is seamless there and the clock stays
+// exact as a float.
+float vnoiseMask(vec2 p)
+{
+	vec2 i = floor(p);
+	vec2 f = p - i;
+	f = f * f * (3.0 - 2.0 * f);
+	vec2 i0 = mod(i, vec2(64.0, 24.0));
+	vec2 i1 = mod(i + 1.0, vec2(64.0, 24.0));
+	return mix(mix(hash2(i0), hash2(vec2(i1.x, i0.y)), f.x),
+	           mix(hash2(vec2(i0.x, i1.y)), hash2(i1), f.x), f.y);
+}
+
 vec4 diffuseAt(float s, vec2 uv)
 {
 	if (s < 4.0)
@@ -243,7 +257,7 @@ void main()
 	float shade = 1.0;
 	if (vWind.x != 0.0 && uPlant2.y > 0.5)
 	{
-		float seed = fract(vFrame.w);
+		float seed = vLeafM.z;
 		// Height and blade field in the object's frame: all parts bend as one.
 		float h = clamp((vFrame.y - vUV1.y) * vInv.y, 0.0, 1.0);
 		bool ringM = uModel.x > 0.5;
@@ -371,7 +385,7 @@ void main()
 				// Mask patches as on the trees: dense patches drifting over
 				// the crown, single cells between them, more with the gust;
 				// a whole crown fluttering at once reads as heat haze.
-				float m = vnoise(pixL * uLeafM.y + vec2(uLeafM.x, 0.37 * uLeafM.x));
+				float m = vnoiseMask(pixL * uLeafM.y + vec2(uLeafM.x, 0.375 * uLeafM.x));
 				float inPatch = smoothstep(0.35, 0.65, m);
 				float fl = uLeafM.w + (1.0 - uLeafM.w) * uLeafM2.x * vClass2.z;
 				float st = uLeafM.z * vLeafM.x;

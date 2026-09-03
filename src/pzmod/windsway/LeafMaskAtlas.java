@@ -38,6 +38,11 @@ final class LeafMaskAtlas {
     private static final IdentityHashMap<Texture, float[]> cache = new IdentityHashMap<>(1024);
     private static final float[] MISS = new float[0];
 
+    // Render thread, per world.
+    static void clearCache() {
+        cache.clear();
+    }
+
     private LeafMaskAtlas() {
     }
 
@@ -73,16 +78,25 @@ final class LeafMaskAtlas {
                 if (in == null) throw new IllegalStateException("leaf_masks.txt missing from jar");
                 BufferedReader r = new BufferedReader(new InputStreamReader(in, StandardCharsets.UTF_8));
                 String line;
+                int skipped = 0;
                 while ((line = r.readLine()) != null) {
                     if (line.isEmpty() || line.charAt(0) == '#') continue;
-                    String[] f = line.split(" ");
-                    if (f.length < 5) continue;
-                    float x = Float.parseFloat(f[1]);
-                    float y = Float.parseFloat(f[2]);
-                    float cw = Float.parseFloat(f[3]);
-                    float ch = Float.parseFloat(f[4]);
-                    map.put(f[0], new float[]{x / w, y / h, (x + cw) / w, (y + ch) / h});
+                    try {
+                        String[] f = line.split(" ");
+                        if (f.length < 5) {
+                            ++skipped;
+                            continue;
+                        }
+                        float x = Float.parseFloat(f[1]);
+                        float y = Float.parseFloat(f[2]);
+                        float cw = Float.parseFloat(f[3]);
+                        float ch = Float.parseFloat(f[4]);
+                        map.put(f[0], new float[]{x / w, y / h, (x + cw) / w, (y + ch) / h});
+                    } catch (RuntimeException e) {
+                        ++skipped;
+                    }
                 }
+                if (skipped > 0) WindSwayMod.trace("leaf masks: " + skipped + " bad lines skipped");
             }
             ByteBuffer buf = BufferUtils.createByteBuffer(w * h);
             buf.put(data).flip();

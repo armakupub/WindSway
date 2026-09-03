@@ -95,6 +95,10 @@ final class StencilHole {
             float x2 = a.stencilX2();
             float y2 = a.stencilY2();
             Inset in = insetFor(a.texWidth(), a.texHeight());
+            if (in == null && !mismatchLogged) {
+                mismatchLogged = true;
+                WindSwayMod.trace("stencil mask " + a.texWidth() + "x" + a.texHeight() + " unknown, using the full stamp");
+            }
             if (in != null) {
                 float w = x2 - x1;
                 float h = y2 - y1;
@@ -111,6 +115,8 @@ final class StencilHole {
         }
         return n;
     }
+
+    private static boolean mismatchLogged;
 
     private static Inset insetFor(int texW, int texH) {
         if (insets == null) return null;

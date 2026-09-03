@@ -21,19 +21,4 @@ public class Patch_Core {
             }
         }
     }
-
-    // The advice outlives the mod in the JVM: after a mod-list change the
-    // getter would stay forced without the mod. ResetLua ends with
-    // OnGameBoot, where the mod's Lua re-arms us if it is still loaded.
-    @Patch(className = "zombie.core.Core",
-           methodName = "ResetLua")
-    public static class Patch_ResetLua {
-
-        @Patch.OnEnter(skipOn = true)
-        public static boolean enter(@Patch.Argument(0) String activeMods,
-                                    @Patch.Argument(1) String reason) {
-            WindSwayMod.enabled = false;
-            return false;
-        }
-    }
 }

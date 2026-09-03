@@ -5,17 +5,22 @@ WindSway = WindSway or {}
 local ModJava = WindSwayMod
 WindSway.javaReady = ModJava ~= nil
 
+-- One setter failing must not take the master switch down with it.
+local warned = {}
+
 local function applyToJava(setterName, value)
     if not WindSway.javaReady then return end
     local fn = ModJava[setterName]
     if not fn then
-        WindSway.javaReady = false
-        print("[WindSway] Java setter missing: " .. setterName)
+        if not warned[setterName] then
+            warned[setterName] = true
+            print("[WindSway] Java setter missing: " .. setterName)
+        end
         return
     end
     local ok, err = pcall(fn, value)
-    if not ok then
-        WindSway.javaReady = false
+    if not ok and not warned[setterName] then
+        warned[setterName] = true
         print("[WindSway] Java call " .. setterName .. " failed: " .. tostring(err))
     end
 end
@@ -27,12 +32,12 @@ if MainOptions then
     local toUI = MainOptions.toUI
     function MainOptions:toUI()
         if WindSway.javaReady and ModJava.vanillaWindSpriteEffects and not self.windSwayHooked then
-            self.windSwayHooked = true
             local opt = self.gameOptions:get("doWindSpriteEffects")
             if opt then
+                self.windSwayHooked = true
                 function opt.toUI(self)
                     local ok, stored = pcall(ModJava.vanillaWindSpriteEffects)
-                    if not ok then stored = getCore():getOptionDoWindSpriteEffects() end
+                    if not ok then stored = false end
                     self.control:setSelected(1, stored)
                 end
             end
@@ -57,7 +62,8 @@ enableOpt.onChangeApply = function(self, value)
 end
 
 -- Preset bands from the wind study (vanilla median 0.12, 74 % below
--- 0.2); Custom = the two sliders. Index order matches addItem below.
+-- 0.2); Custom = the two sliders. Index order matches addItem below and
+-- is what ModOptions.ini stores: never reorder, append only.
 local presetBands = {
     { 0.0, 0.0 },   -- Vanilla
     { 0.15, 0.3 },  -- Calm
@@ -134,7 +140,8 @@ windSoundOpt.onChangeApply = function(self, value)
     applyToJava("setWindSound", value)
 end
 
--- Combo index 1..3 -> Java level 2..0.
+-- Combo index 1..3 -> Java level 2..0. The index is what ModOptions.ini
+-- stores: never reorder, append only.
 local treeDetailLevels = { 2, 1, 0 }
 local treeDetailOpt = modOptions:addComboBox(
     "treeDetail",

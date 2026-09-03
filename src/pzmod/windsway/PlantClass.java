@@ -70,6 +70,12 @@ final class PlantClass {
     private static final IdentityHashMap<IsoSprite, Integer> cache = new IdentityHashMap<>(2048);
     private static final IdentityHashMap<IsoSprite, Boolean> dryCache = new IdentityHashMap<>(2048);
 
+    // Game thread, per world: IsoSpriteManager rebuilds every sprite.
+    static void clearCache() {
+        cache.clear();
+        dryCache.clear();
+    }
+
     // Game thread. Dead or dry flora: the tan and orange grass sets
     // (e_newgrass season 3 and 4), dry blades and dead stalks, dry weeds,
     // bare bush bases, dead corn.

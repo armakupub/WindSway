@@ -7,7 +7,7 @@
 
 uniform sampler2D DIFFUSE;
 
-uniform vec4 uParams;    // z: leaf cell px, w: blend sharpening (1 = bilinear, large = nearest); the clocks travel per tree (vPage.zw, vMisc.w, vPixTexel.z)
+uniform vec4 uParams;    // z: leaf cell px, w: blend sharpening (1 = bilinear, large = nearest); the clocks travel per tree (vPage.xy, vMisc.w, vPixTexel.z)
 uniform vec4 uMode;      // x: 1 = outline pass, y: 1 = alpha capped at the fade alpha, z: evergreen tier bounce at the trunk, w: its exponent
 uniform vec2 stepSize;
 uniform vec4 outlineColor;
@@ -24,7 +24,8 @@ uniform vec4 uQual2;     // x: leaf shade
 uniform sampler2D MASK;  // leaf-material atlas, quarter sprite px, 1 = leaf, 0 = painted wood
 uniform vec4 uWood;      // x, y: sprite texel to mask-atlas uv (0.25 / atlas size), z: mask strength
 uniform vec4 uDebug;     // x: diagnosis view, 0 = off, 7 = depth-punch (each drawn fragment adds 20% red)
-varying vec4 vPage;      // xy: uv per texel of the page, z: leaf clock integer cycles mod 64, w: branch clock integer cycles mod 64
+uniform vec2 uPage;      // uv per texel of the run's page
+varying vec2 vPage;      // x: leaf clock integer cycles mod 64, y: branch clock integer cycles mod 64
 varying float vWind;     // local wind 0..1
 vec4 gTexel;             // xy: uv per texel of the page, zw: texels per uv (page size)
 
@@ -104,6 +105,20 @@ float vnoise(vec2 p)
 	           mix(hash(i + vec2(0.0, 1.0)), hash(i + vec2(1.0, 1.0)), f.x), f.y);
 }
 
+// Lattice periodic in 64 x 24 cells: the mask clock wraps at 64 with a
+// drift of 3/8 across, so the field is seamless there and the clock stays
+// exact as a float.
+float vnoiseMask(vec2 p)
+{
+	vec2 i = floor(p);
+	vec2 f = p - i;
+	f = f * f * (3.0 - 2.0 * f);
+	vec2 i0 = mod(i, vec2(64.0, 24.0));
+	vec2 i1 = mod(i + 1.0, vec2(64.0, 24.0));
+	return mix(mix(hash(i0), hash(vec2(i1.x, i0.y)), f.x),
+	           mix(hash(vec2(i0.x, i1.y)), hash(i1), f.x), f.y);
+}
+
 // A leaf cell flutters at full amplitude or not at all: a fraction of a
 // pixel everywhere reads as heat haze.
 float gate(vec2 i, float dens)
@@ -168,7 +183,7 @@ void main()
 {
 	// Bend over the height: rod with the exponent (evergreens, bare crowns)
 	// or the broadleaf bow, mirrored in TreeRenderer.profileRaw.
-	gTexel = vec4(vPage.xy, 1.0 / vPage.xy);
+	gTexel = vec4(uPage, 1.0 / uPage);
 	float h = clamp(vUVH.z, 0.0, 1.0);
 	float hc = vBend.y;
 	float kn = vMisc.y;
@@ -239,9 +254,9 @@ void main()
 	            * smoothstep(vLeaf.w + soft, vLeaf.w - soft, uy);
 
 	vec2 pix = vPixTexel.xy;
-	float nmB = vPage.w;
+	float nmB = vPage.y;
 	float qB = vPixTexel.z;
-	float nmL = vPage.z;
+	float nmL = vPage.x;
 	float qL = vMisc.w;
 	float gTree = vWind;
 	vec2 pb = pix * vUVH.w;
@@ -293,7 +308,7 @@ void main()
 		float patch = 1.0;
 		if (uMask.y > 0.0 && uQual.w > 0.5)
 		{
-			float m = vnoise(pix * uMask.z + vec2(uMask.x, 0.37 * uMask.x));
+			float m = vnoiseMask(pix * uMask.z + vec2(uMask.x, 0.375 * uMask.x));
 			float fl = uMask.w + (1.0 - uMask.w) * uLeaf.z * gTree;
 			float inPatch = smoothstep(0.35, 0.65, m);
 			float dens = mix(1.0, fl + (1.0 - fl) * inPatch, uMask.y);

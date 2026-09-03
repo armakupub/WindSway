@@ -40,6 +40,10 @@ final class BushGenus {
 
     private static final IdentityHashMap<IsoSprite, Integer> cache = new IdentityHashMap<>(256);
 
+    static void clearCache() {
+        cache.clear();
+    }
+
     // Game thread. Genus of a crown or bloom part, -1 when the sprite does
     // not name a species (bare bases are ambiguous: two species share each
     // stem drawing).

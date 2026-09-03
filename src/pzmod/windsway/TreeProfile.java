@@ -77,7 +77,7 @@ final class TreeProfile {
     // Vanilla's evergreens: pine, hemlock and holly (drawn as a dark
     // blue-green cone, stiff glossy leaves); mod trees join by name.
     private static final Pattern CONIFER = Pattern.compile(
-            "pine|hemlock|holly|spruce|fir(?!e)|cedar|juniper|cypress|larch|evergreen|conifer|tanne|fichte|kiefer");
+            "pine|hemlock|holly|spruce|fir(?!e|st)|cedar|juniper|cypress|larch|evergreen|conifer|tanne|fichte|kiefer");
 
     private static boolean coniferByName(String name) {
         return name != null && CONIFER.matcher(name.toLowerCase()).find();
@@ -130,6 +130,11 @@ final class TreeProfile {
     private static final IdentityHashMap<Texture, TreeProfile> cache = new IdentityHashMap<>(1024);
     private static volatile boolean tableFailed;
 
+    // Render thread, per world.
+    static void clearCache() {
+        cache.clear();
+    }
+
     // Any thread.
     static void warm() {
         if (table == null) loadTable();
@@ -142,31 +147,41 @@ final class TreeProfile {
             if (in == null) throw new IllegalStateException("tree_profiles.txt missing from jar");
             BufferedReader r = new BufferedReader(new InputStreamReader(in, StandardCharsets.UTF_8));
             String line;
+            int skipped = 0;
             while ((line = r.readLine()) != null) {
                 if (line.isEmpty() || line.charAt(0) == '#') continue;
-                String[] f = line.split(" ");
-                if (f.length < 8) continue;
-                float base = Float.parseFloat(f[1]);
-                float top = Float.parseFloat(f[2]);
-                float crownFrac = Float.parseFloat(f[3]);
-                boolean leafy = f[4].equals("1");
-                boolean rigid = f[7].equals("1");
-                float stubTop = f.length > 8 ? Float.parseFloat(f[8]) : base;
-                float density = f.length > 10 ? Float.parseFloat(f[10]) : 1.0f;
-                float r50 = f.length > 13 ? Float.parseFloat(f[11]) : 0.0f;
-                float r20 = f.length > 13 ? Float.parseFloat(f[12]) : 0.0f;
-                float blob = f.length > 13 ? Float.parseFloat(f[13]) : 0.0f;
-                float crownRow = base - crownFrac * (base - top);
-                int[] id = parse(f[0]);
-                int species = id == null ? -1 : id[0];
-                int family = id == null ? 0 : id[1];
-                int stage = id == null ? 0 : id[2];
-                int season = id == null ? (leafy ? SEASON_SUMMER : SEASON_BARE) : id[3];
-                boolean bloom = season == SEASON_SPRING
-                        && (species == REDBUD || species == DOGWOOD || species == HAWTHORN);
-                map.put(f[0], new TreeProfile(base, top, crownRow, leafy, rigid, stubTop, coniferByName(f[0]),
-                        species, family, stage, season, bloom, density, r50, r20, blob));
+                // A bad line costs its sprite, not the table.
+                try {
+                    String[] f = line.split(" ");
+                    if (f.length < 8) {
+                        ++skipped;
+                        continue;
+                    }
+                    float base = Float.parseFloat(f[1]);
+                    float top = Float.parseFloat(f[2]);
+                    float crownFrac = Float.parseFloat(f[3]);
+                    boolean leafy = f[4].equals("1");
+                    boolean rigid = f[7].equals("1");
+                    float stubTop = f.length > 8 ? Float.parseFloat(f[8]) : base;
+                    float density = f.length > 10 ? Float.parseFloat(f[10]) : 1.0f;
+                    float r50 = f.length > 13 ? Float.parseFloat(f[11]) : 0.0f;
+                    float r20 = f.length > 13 ? Float.parseFloat(f[12]) : 0.0f;
+                    float blob = f.length > 13 ? Float.parseFloat(f[13]) : 0.0f;
+                    float crownRow = base - crownFrac * (base - top);
+                    int[] id = parse(f[0]);
+                    int species = id == null ? -1 : id[0];
+                    int family = id == null ? 0 : id[1];
+                    int stage = id == null ? 0 : id[2];
+                    int season = id == null ? (leafy ? SEASON_SUMMER : SEASON_BARE) : id[3];
+                    boolean bloom = season == SEASON_SPRING
+                            && (species == REDBUD || species == DOGWOOD || species == HAWTHORN);
+                    map.put(f[0], new TreeProfile(base, top, crownRow, leafy, rigid, stubTop, coniferByName(f[0]),
+                            species, family, stage, season, bloom, density, r50, r20, blob));
+                } catch (RuntimeException e) {
+                    ++skipped;
+                }
             }
+            if (skipped > 0) System.out.println("[WindSway] tree profiles: " + skipped + " bad lines skipped");
         } catch (Throwable t) {
             tableFailed = true;
             System.out.println("[WindSway] tree profile table unavailable, using defaults: " + t);

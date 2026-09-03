@@ -54,11 +54,15 @@ public class WindSwayGrassDrawer extends TextureDraw.GenericDrawer {
     static boolean ready() {
         int s = state;
         if (s == READY) return true;
-        if (s == UNKNOWN && !probeQueued) {
-            probeQueued = true;
-            SpriteRenderer.instance.drawGeneric(new WindSwayGrassDrawer());
-        }
+        if (s == UNKNOWN && !probeQueued) probe();
         return false;
+    }
+
+    // Game thread. Also the warm-up's probe, so the first pass of a world
+    // does not queue a second one.
+    static void probe() {
+        probeQueued = true;
+        SpriteRenderer.instance.drawGeneric(new WindSwayGrassDrawer());
     }
 
     static void onPassDone() {
@@ -66,18 +70,30 @@ public class WindSwayGrassDrawer extends TextureDraw.GenericDrawer {
     }
 
     // Game thread. After a latch: probe again, once per new world or on
-    // request from the console.
+    // request from the console. The shader and its caches are the render
+    // thread's, it resets them at its next segment.
     static void rearm() {
         if (state != FAILED) return;
-        shader = null;
-        samplersSet = false;
-        uniformsLooked = false;
-        uLoaded = false;
         probeQueued = false;
-        glProbe.reset();
+        rearmRequested = true;
         state = UNKNOWN;
         WindSwayMod.trace("grass batch re-armed, probing again");
     }
+
+    private static volatile boolean rearmRequested;
+
+    private static void applyRearm() {
+        if (!rearmRequested) return;
+        rearmRequested = false;
+        shader = null;
+        programId = 0;
+        samplersSet = false;
+        uniformsLooked = false;
+        uLoaded = false;
+        glProbe.reset();
+    }
+
+    private static int programId;
 
     private static final WindSwayMod.GlProbe glProbe = new WindSwayMod.GlProbe();
     static final GpuTimer gpuTimer = new GpuTimer();
@@ -109,8 +125,9 @@ public class WindSwayGrassDrawer extends TextureDraw.GenericDrawer {
     // follows the VBORenderer convention (location == element index):
     // pos3f, color4f, uv0, uv1, depth1f, wind4f, rect4f, texel4f, frame4f,
     // leaf4f, class4f (bend exponent, blade spread, tip factor, sheen factor),
-    // class3 4f (damping factor, flutter factor, cross position, steady share)
-    // (layout contract with windsway_grass_static.vert).
+    // class3 4f (damping factor, flutter factor, cross position, steady share),
+    // body4f (stem share, swing, inertia, lobe px), look4f (flicker, mask
+    // share): 14 attributes (layout contract with windsway_grass_static.vert).
     private static final int STRIDE = 192;
     private static final int FLOATS = STRIDE / 4;
     private static int streamCapacity = 4 * 1024 * 1024;
@@ -354,7 +371,7 @@ public class WindSwayGrassDrawer extends TextureDraw.GenericDrawer {
         // offscreen px.
         void bounds(float[] out) {
             out[0] = ox - padL + Math.min(ox1, ox4) * w;
-            out[1] = oy + Math.min(oy1, oy2) * h;
+            out[1] = oy - padT + Math.min(oy1, oy2) * h;
             out[2] = ox + w + padR + Math.max(ox2, ox3) * w;
             out[3] = oy + h + Math.max(oy3, oy4) * h;
         }
@@ -391,26 +408,16 @@ public class WindSwayGrassDrawer extends TextureDraw.GenericDrawer {
     }
 
     // Quad pool: capture allocated ~4750 quads per frame (~170 MB/s of
-    // garbage at the frame cap). The game thread pops from its private
-    // list and refills in bulk from the render thread's returns: one lock
-    // per handoff, not per quad.
+    // garbage at the frame cap). Both ends are the game thread: the capture
+    // pops, postRender (from the render state's prePopulating) returns a
+    // drawn batch in bulk.
     private static final int POOL_CAP = 20000;
     private static final ArrayList<GrassQuad> quadPool = new ArrayList<>(4096);
-    private static final ArrayList<GrassQuad> quadReturns = new ArrayList<>(4096);
-    private static volatile boolean returnsAvailable;
     static int poolHit5s;
     static int poolMiss5s;
 
-    // Game thread.
     static GrassQuad obtainQuad() {
         ArrayList<GrassQuad> pool = quadPool;
-        if (pool.isEmpty() && returnsAvailable) {
-            synchronized (quadReturns) {
-                pool.addAll(quadReturns);
-                quadReturns.clear();
-                returnsAvailable = false;
-            }
-        }
         int n = pool.size();
         if (n == 0) {
             if (WindSwayMod.debugLog) poolMiss5s++;
@@ -420,20 +427,19 @@ public class WindSwayGrassDrawer extends TextureDraw.GenericDrawer {
         return pool.remove(n - 1);
     }
 
-    // Render thread, after the last segment of a batch drew. reset() runs
-    // outside the lock; the texture refs are dropped so a pooled quad
-    // never pins a page past a world unload.
+    // After the last segment of a batch drew. The texture refs are dropped
+    // so a pooled quad never pins a page past a world unload.
     private static void recycle(ArrayList<GrassQuad> qs) {
+        ArrayList<GrassQuad> pool = quadPool;
+        int room = POOL_CAP - pool.size();
         for (int i = 0; i < qs.size(); ++i) {
-            qs.get(i).reset();
-        }
-        synchronized (quadReturns) {
-            int room = POOL_CAP - quadReturns.size();
-            for (int i = 0; i < qs.size() && room > 0; ++i, --room) {
-                quadReturns.add(qs.get(i));
+            GrassQuad q = qs.get(i);
+            q.reset();
+            if (room > 0) {
+                pool.add(q);
+                --room;
             }
         }
-        returnsAvailable = true;
     }
 
     private ArrayList<GrassQuad> quads;
@@ -574,9 +580,13 @@ public class WindSwayGrassDrawer extends TextureDraw.GenericDrawer {
     // setup (tree segments draw in between and clobber both).
     void renderSegment(int range) {
         if (state == FAILED) return;
+        applyRearm();
         boolean diag = WindSwayMod.debugLog;
         long t0 = diag ? System.nanoTime() : 0L;
         boolean timed = false;
+        boolean withVao = false;
+        boolean glSection = false;
+        boolean tornDown = false;
         try {
             if (debugFail) {
                 throw new IllegalStateException("forced by setDebugGrassFail");
@@ -590,10 +600,19 @@ public class WindSwayGrassDrawer extends TextureDraw.GenericDrawer {
             if (shader == null) {
                 shader = ShaderManager.instance.getOrCreateShader("windsway_grass", true, false);
             }
-            if (!shader.getShaderProgram().isCompiled()
-                    && !WindSwayMod.recompileShaderWithLog(shader.getShaderProgram())) {
+            ShaderProgram program = shader.getShaderProgram();
+            if (!program.isCompiled() && !WindSwayMod.recompileShaderWithLog(program)) {
                 fail("windsway_grass shader not compiled");
                 return;
+            }
+            // A recompile moves the uniform locations and drops the sampler
+            // units.
+            int pid = program.getShaderID();
+            if (pid != programId) {
+                programId = pid;
+                uniformsLooked = false;
+                samplersSet = false;
+                uLoaded = false;
             }
             if (!uniformsLooked) lookupUniforms();
             if (maxSlots == 0) {
@@ -608,6 +627,7 @@ public class WindSwayGrassDrawer extends TextureDraw.GenericDrawer {
                 return;
             }
             if (this.quads.isEmpty()) return;
+            glSection = true;
             if (!built) {
                 build(diag, t0);
             }
@@ -651,7 +671,6 @@ public class WindSwayGrassDrawer extends TextureDraw.GenericDrawer {
             if (!samplersSet) {
                 samplersSet = true;
                 shader.Start();
-                ShaderProgram program = shader.getShaderProgram();
                 for (int i = 0; i < MAX_SLOTS; ++i) {
                     program.setSamplerUnit("DIFFUSE" + i, i < maxSlots ? i : 0);
                     program.setSamplerUnit("DEPTH" + i, depthBase + (i < maxSlots ? i : 0));
@@ -661,10 +680,10 @@ public class WindSwayGrassDrawer extends TextureDraw.GenericDrawer {
 
             long t2 = t1;
 
-            // The engine never binds a VAO, so ours holds the nine pointers (the
+            // The engine never binds a VAO, so ours holds the 14 pointers (the
             // stream VBO id survives orphaning) and the default object keeps the ring
             // buffer's state. Without VAO: pointers per batch, extras disabled after.
-            boolean withVao = useVao && vaoOk();
+            withVao = useVao && vaoOk();
             if (withVao) {
                 if (vao == 0) {
                     GL15.glBindBuffer(GL15.GL_ARRAY_BUFFER, streamVbo);
@@ -739,27 +758,12 @@ public class WindSwayGrassDrawer extends TextureDraw.GenericDrawer {
             }
 
             shader.End();
-            if (withVao) {
-                GL30.glBindVertexArray(0);
-            } else {
-                for (int i = 5; i < NUM_ATTRIBS; ++i) {
-                    GL20.glDisableVertexAttribArray(i);
-                }
-            }
-            GL15.glBindBuffer(GL15.GL_ARRAY_BUFFER, 0);
+            teardown(withVao);
+            tornDown = true;
             if (timed) {
                 gpuTimer.end();
                 timed = false;
             }
-
-            // VBORenderer.flush()'s contract with the RingBuffer: without
-            // these flags the next geometry run keeps attrib pointers into
-            // OUR buffer, usually the very draw that triggered the flush.
-            // The flags are not consumed between two generic drawers; without
-            // the cache invalidation the shadow drawer samples our last page.
-            Texture.lastTextureID = -1;
-            SpriteRenderer.ringBuffer.restoreVbos = true;
-            SpriteRenderer.ringBuffer.restoreBoundTextures = true;
             if (diag) {
                 long t6 = System.nanoTime();
                 cpuEndNs.addAndGet(t6 - t5);
@@ -778,20 +782,37 @@ public class WindSwayGrassDrawer extends TextureDraw.GenericDrawer {
                         + (world ? "world" : "screen") + " path)");
             }
         } catch (Throwable t) {
+            fail(t);
+        } finally {
             if (timed) gpuTimer.end();
-            // A VAO left bound after a mid-draw throw would swallow the
-            // engine's attrib pointers for the rest of the session.
-            if (vaoSupport == 1) {
-                try {
-                    GL30.glBindVertexArray(0);
-                } catch (Throwable ignored) {
+            if (glSection && !tornDown) teardown(withVao);
+        }
+    }
+
+    // Render thread, after a segment drew or threw: unit 0 active, no VAO
+    // or extra attribute arrays, no array buffer. A VAO left bound would
+    // swallow the engine's attrib pointers for the rest of the session.
+    // VBORenderer.flush()'s contract with the RingBuffer: without the
+    // flags the next geometry run keeps attrib pointers into OUR buffer,
+    // usually the very draw that triggered the flush. The flags are not
+    // consumed between two generic drawers; without the cache invalidation
+    // the shadow drawer samples our last page.
+    private static void teardown(boolean withVao) {
+        try {
+            GL13.glActiveTexture(GL13.GL_TEXTURE0);
+            if (withVao) {
+                GL30.glBindVertexArray(0);
+            } else {
+                for (int i = 5; i < NUM_ATTRIBS; ++i) {
+                    GL20.glDisableVertexAttribArray(i);
                 }
             }
-            Texture.lastTextureID = -1;
-            SpriteRenderer.ringBuffer.restoreVbos = true;
-            SpriteRenderer.ringBuffer.restoreBoundTextures = true;
-            fail(t);
+            GL15.glBindBuffer(GL15.GL_ARRAY_BUFFER, 0);
+        } catch (Throwable ignored) {
         }
+        Texture.lastTextureID = -1;
+        SpriteRenderer.ringBuffer.restoreVbos = true;
+        SpriteRenderer.ringBuffer.restoreBoundTextures = true;
     }
 
     // Render thread, once per batch: stage fill, the runs (broken at every
@@ -829,6 +850,8 @@ public class WindSwayGrassDrawer extends TextureDraw.GenericDrawer {
             TextureID diffuse = q.tex.getTextureId();
             TextureID depth = q.depthTex.getTextureId();
             DepthAtlas.Cell cell = atlasOn ? DepthAtlas.cellFor(q.depthTex) : null;
+            // Rewritten in place into atlas space: a quad is built once,
+            // then recycled.
             if (cell != null) {
                 q.du0 = cell.u0 + q.du0 * cell.su;
                 q.du1 = cell.u0 + q.du1 * cell.su;
@@ -897,7 +920,7 @@ public class WindSwayGrassDrawer extends TextureDraw.GenericDrawer {
     // texel centres. Unit cache per batch: vanilla rebinds units 0-2 in between.
     private static void drawRuns(int baseVert, int from, int to) {
         for (int u = 0; u < unitBound.length; ++u) {
-            unitBound[u] = 0;
+            unitBound[u] = -1;
         }
         int active = 0;
         for (int i = from; i < to; ++i) {
@@ -980,8 +1003,9 @@ public class WindSwayGrassDrawer extends TextureDraw.GenericDrawer {
         float yBL = q.oy + q.h + q.oy4 * q.h;
         float uMin = Math.min(q.u0, q.u1);
         float uMax = Math.max(q.u0, q.u1);
-        // aFrame.w: seed fraction, barrier bits 2/4, page slot pair above (times 8).
-        float frameW = q.windSeed + q.barrier + 8.0f * slotCode;
+        // aFrame.w: barrier bits 2/4, page slot pair above (times 8). The seed
+        // travels in aWind.y.
+        float frameW = q.barrier + 8.0f * slotCode;
         float r1 = q.lit ? q.r1 : q.r;
         float g1 = q.lit ? q.g1 : q.g;
         float b1 = q.lit ? q.b1 : q.b;

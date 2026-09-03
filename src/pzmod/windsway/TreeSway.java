@@ -297,20 +297,51 @@ public final class TreeSway {
         WindSwayMod.trace("tree sway model re-armed");
     }
 
+    static boolean isOk() {
+        return ok;
+    }
+
+    // Game thread, per world. treeTime, advect and advectPlant have no
+    // in-session wrap: they drive octaves of incommensurable lengths, so
+    // no period is seamless for all of them; as floats they lose their
+    // per-frame step after some hours, which a world change re-bases. The
+    // pop lands in the loading screen.
+    static void resetClocks() {
+        time = 0.0;
+        swayClock = 0.0;
+        treeTime = 0.0;
+        ringClock = 0.0;
+        advect = 0.0;
+        advectPlant = 0.0;
+        branchClock = 0.0;
+        leafClock = 0.0;
+        coniferLeafClock = 0.0;
+        maskClock = 0.0;
+        breezeClock = Math.random() * 1.0e7;
+    }
+
     static boolean isTreePool(ObjectRenderEffects ore) {
         IdentityHashMap<ObjectRenderEffects, Integer> m = pools;
         return m != null && m.containsKey(ore);
     }
+
+    // Pools per wind type (ObjectRenderEffects.EFFECTS_COUNT); the index is
+    // type * stride + pool.
+    private static int poolStride = 15;
 
     private static IdentityHashMap<ObjectRenderEffects, Integer> mapPools(String field) throws Exception {
         java.lang.reflect.Field f = Accessor.findField(ObjectRenderEffects.class, field);
         if (f == null) throw new NoSuchFieldException(field);
         f.setAccessible(true);
         ObjectRenderEffects[][] arr = (ObjectRenderEffects[][]) f.get(null);
+        java.lang.reflect.Field count = Accessor.findField(ObjectRenderEffects.class, "EFFECTS_COUNT");
+        if (count == null) throw new NoSuchFieldException("EFFECTS_COUNT");
+        count.setAccessible(true);
+        poolStride = Math.max(1, count.getInt(null));
         IdentityHashMap<ObjectRenderEffects, Integer> map = new IdentityHashMap<>(64);
         for (int t = 0; t < arr.length && t < 3; ++t) {
-            for (int i = 0; i < arr[t].length; ++i) {
-                map.put(arr[t][i], t * 15 + i);
+            for (int i = 0; i < arr[t].length && i < poolStride; ++i) {
+                map.put(arr[t][i], t * poolStride + i);
             }
         }
         if (field.equals("WIND_EFFECTS")) clockPool = arr[0][0];
@@ -328,7 +359,7 @@ public final class TreeSway {
         h ^= h >>> 15;
         h *= 0x85ebca6b;
         h ^= h >>> 13;
-        return ((h >>> 8) & 0xFFFF) / 65535.0f;
+        return ((h >>> 8) & 0xFFFF) / 65536.0f;
     }
 
     // ~90x per frame from woven advice; must not throw. True = pool
@@ -418,7 +449,7 @@ public final class TreeSway {
                 leafClock = wrap(leafClock + leafRateNow * dtReal);
                 coniferLeafClock = wrap(coniferLeafClock + leafRateNow
                         * (TreeRenderer.coniferLeafHz + (TreeRenderer.coniferLeafHzStorm - TreeRenderer.coniferLeafHz) * wind) * dtReal);
-                maskClock = wrap(maskClock + maskRate * dtReal);
+                maskClock = wrapMask(maskClock + maskRate * dtReal);
                 double rk = Math.abs(dir) * plantCurve(wp) * (1.0 + 0.5 * plantBladeVar);
                 reachDown = (float) (rk * (1.0 + Math.max(0.05, plantCapKnee)));
                 reachUp = (float) (rk * Math.max(0.0, upwindCap));
@@ -441,7 +472,11 @@ public final class TreeSway {
             ok = false;
             System.out.println("[WindSway] tree sway model disabled, trees follow vanilla: " + t);
             // The clocks stop here; the renderers would keep drawing a
-            // frozen pose at full cost.
+            // frozen pose at full cost. The breeze stops too, the sliders
+            // take over as the floor (vanilla's update then sees the plant
+            // floor on the tree pools as well, treeWindFloor is out).
+            WindSwayMod.breezeTree = -1.0;
+            WindSwayMod.breezePlant = -1.0;
             TreeRenderer.disable("wind model disabled");
             WindSwayGrassDrawer.fail("wind model disabled");
             return false;
@@ -641,6 +676,15 @@ public final class TreeSway {
         return t > 65536.0 ? t - 65536.0 : t;
     }
 
+    // The mask field repeats every 64 cells along the drift and 24 across
+    // (vnoiseMask in the fragment shaders), so the clock wraps there
+    // seamlessly and stays exact as a float.
+    static final double MASK_WRAP = 64.0;
+
+    private static double wrapMask(double t) {
+        return t >= MASK_WRAP ? t - MASK_WRAP : t;
+    }
+
     // The swing clocks wrap at SWAY_WRAP seconds and every swing period is
     // SWAY_WRAP / (11 m): the wrap is then 11 m cycles of the main sine and
     // 6 m / 20 m of the 11/6 and 0.55 companions, all whole, so the phase
@@ -665,16 +709,22 @@ public final class TreeSway {
         return breathe * (0.5 + 0.5 * s);
     }
 
+    // Vanilla stiffens wind types 2 and 3 to a half and a quarter.
+    public static volatile double poolStiff2 = 0.6;
+    public static volatile double poolStiff3 = 0.35;
+
     private static double poolLean(int i) {
         double wind = w;
+        int type = i / poolStride;
+        double stiff = type == 0 ? 1.0 : (type == 1 ? poolStiff2 : poolStiff3);
         double period = quantPeriod(bushPeriod * (1.0 - periodSpread + 2.0 * periodSpread * hash(i, 4)));
-        return dir * bushAmplitude(wind) * swing(wind, swayClock, time, period, hash(i, 1), hash(i, 2), hash(i, 3), hash(i, 5));
+        return dir * bushAmplitude(wind) * stiff * swing(wind, swayClock, time, period, hash(i, 1), hash(i, 2), hash(i, 3), hash(i, 5));
     }
 
     private static double plantLean(int i) {
         double wind = wPlant;
         if (wind <= 0.0) return 0.0;
-        int type = i / 15;
+        int type = i / poolStride;
         double stiff = type == 0 ? 1.0 : (type == 1 ? plantStiff2 : plantStiff3);
         double amp = plantAmpMax * Math.pow(wind, plantAmpPow) * (1.0 + stormGain * accent(wind)) * stiff;
         double period = quantPeriod(plantPeriod * (1.0 - periodSpread + 2.0 * periodSpread * hash(i, 4)) / (0.7 + 0.3 * stiff));

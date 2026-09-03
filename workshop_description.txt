@@ -45,6 +45,9 @@ WorkshopItems=3619862853;3782670683[/code]
 [b]What does it cost in FPS?[/b]
 Some, anything that moves is drawn every frame. Wind Sway batches it and stays well below vanilla's wind option; tree-heavy areas even run faster than vanilla on my machine.
 
+[b]The constant movement or the wind sound is getting on my nerves?[/b]
+Set Wind to Calm or Vanilla in Options → Mods → Wind Sway, or untick "Wind sound". The default is Normal.
+
 [b]Why ZombieBuddy, can't this work without it?[/b]
 No. The wind effects and the renderer are Java, Lua can't reach them.
 

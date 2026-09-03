@@ -1,6 +1,19 @@
 Wind Sway - Changelog
 =====================
 
+0.4.2 - 2026-09-03
+  - The weather override now yields only to rain, fog and storms. A dry front no longer silences the breeze.
+  - Fixed: leaving a game that had the mod enabled only in its save could switch the game's own "Wind Sprite Effects" on for good and keep the renderer running without the mod.
+  - Fixed: plants next to a highlighted object (a door with the key in hand, a safehouse) could draw twice or out of place.
+  - Fixed: lit signs drew dark at night, blood on walls vanished, roof tiles at chunk edges showed a seam. These draw as in vanilla now.
+  - Fixed: in a storm, swaying grass tips could show over a fence.
+  - Fixed: a depth map copied before its upload left its plants invisible for the session.
+  - Fixed: trees baked into chunk textures stood upright beside leaning live ones; overlay foliage moved out of phase with its branches.
+  - Fixed: the wind sound floor applied in the main menu.
+  - Fixed: the leaf patch drift could judder after some hours in one world. The clocks restart per world.
+  - Performance: no GPU timer queries in normal play; the tree pass calibration runs only with the debug log.
+  - Internal: renderer fallbacks restore the GL state, caches are cleared per world.
+
 0.4.1 - 2026-09-01
   - Fixed: the wind options only took effect after a game restart.
   - The wind now defaults to Normal.

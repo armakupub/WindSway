@@ -36,7 +36,6 @@ uniform vec4 uParams;    // z: leaf cell px
 uniform vec4 uLobe;      // x: lobe reference cell px, y: rate exponent
 uniform vec4 uLeaf;      // y: leaf cell growth exponent
 uniform vec4 uFlick2;    // w: cluster rate exponent over leaf cell / cluster cell
-uniform vec2 uPage;      // uv per texel of the run's page
 
 out vec4 vColor;
 out vec4 vUVH;
@@ -46,7 +45,7 @@ out vec4 vBend;
 out vec4 vLeaf;
 out vec4 vMisc;
 out vec4 vLeaf2;
-out vec4 vPage;
+out vec2 vPage;
 out vec4 vWood;
 out float vWind;
 
@@ -68,7 +67,7 @@ void main (void)
 	vPixTexel = vec4(aPix.xy, aPix.w, 1.0 / clusterCell);
 	vLeaf2 = vec4(flickHalf > 0.5 ? 2.0 / flickHalf : 0.0, aLeaf2.w, aLeaf2.y,
 	              pow(leafCell / clusterCell, uFlick2.w));
-	vPage = vec4(uPage, mod(aPix.z, 64.0), floor(aPix.z / 64.0));
+	vPage = vec2(mod(aPix.z, 64.0), floor(aPix.z / 64.0));
 	vWind = aLeaf2.z;
 	vRect = aRect;
 	vBend = aBend;

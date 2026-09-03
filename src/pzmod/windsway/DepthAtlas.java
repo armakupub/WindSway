@@ -2,6 +2,7 @@ package pzmod.windsway;
 
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.IdentityHashMap;
 
 import org.lwjgl.opengl.GL11;
@@ -9,18 +10,21 @@ import org.lwjgl.opengl.GL12;
 import org.lwjgl.opengl.GL30;
 import org.lwjgl.opengl.GL43;
 import org.lwjgl.opengl.GLCapabilities;
+import org.lwjgl.system.MemoryUtil;
 import org.lwjglx.opengl.Display;
 
-import zombie.core.opengl.RenderThread;
 import zombie.core.textures.Texture;
 import zombie.core.textures.TextureID;
 import zombie.iso.IsoCamera;
 
 // One GL texture per tile depth map in the engine (TileDepthTexture), so a
 // grass batch ran out of depth slots after eight quads. Each map seen is
-// copied into this atlas on the GPU once the engine's upload has run (it
-// sits on the render thread's invoke queue, outside the frame); an early
-// copy freezes an empty cell for the session.
+// copied into this atlas on the GPU once the engine's upload has run. The
+// engine specifies a map in two queued steps (an RGBA placeholder from the
+// TextureID constructor, the R8 data from TileDepthTexture.updateGPUTexture)
+// and the GL id exists after the first: a copy taken between them would
+// freeze garbage in the cell for the session, so a claimed cell waits two
+// atlas frames and every round of copies is checked for a GL error.
 final class DepthAtlas {
 
     static final int MODE_AUTO = -1;
@@ -36,8 +40,11 @@ final class DepthAtlas {
         int cx;
         int cy;
         int srcId = -1;
-        boolean uploaded;
+        int readyTick;
+        int tries;
         boolean copied;
+        // Copies kept failing: unusable until recycled.
+        boolean dead;
         TextureID key;
         Texture source;
         int lastUsed;
@@ -70,6 +77,14 @@ final class DepthAtlas {
     // larger than the atlas then overflows onto the depth slots instead of
     // rotating through the copies every frame.
     private static final int EVICT_AGE = 30;
+    private static final int READY_TICKS = 2;
+    private static final int MAX_TRIES = 3;
+    private static volatile boolean clearRequested;
+    // After a failed round the cells are copied one per batch, so the
+    // error lands on the cell that caused it.
+    private static boolean retrySingly;
+    private static boolean copyFailLogged;
+    private static final ArrayList<Cell> round = new ArrayList<>();
 
     static volatile int diagCopies;
     static volatile int diagCells;
@@ -94,17 +109,23 @@ final class DepthAtlas {
     }
 
     // Game thread. A copy or init failure parks the atlas; try again per
-    // new world.
+    // new world. The cells go too: the engine rebuilds its depth maps per
+    // world, the old keys would pin them.
     static void rearm() {
         if (inited && mode == MODE_OFF && modeWanted != MODE_OFF) {
             reinit = true;
         }
+        clearRequested = true;
     }
 
     static void beginBatch() {
         if (reinit) {
             reinit = false;
             destroy();
+        }
+        if (clearRequested) {
+            clearRequested = false;
+            clearCells();
         }
         if (!inited) init();
         if (mode == MODE_OFF) return;
@@ -114,19 +135,60 @@ final class DepthAtlas {
             ++tick;
         }
         if (pending.isEmpty()) return;
+        round.clear();
         for (int i = pending.size() - 1; i >= 0; --i) {
             Cell c = pending.get(i);
-            if (!c.uploaded) continue;
+            if (tick < c.readyTick) continue;
             TextureID id = c.source.getTextureId();
             int src = id != null ? id.getID() : -1;
             if (src == -1) continue;
-            if (copy(src, c)) {
-                c.srcId = src;
-                c.copied = true;
-                ++diagCopies;
+            if (round.isEmpty()) {
+                while (GL11.glGetError() != GL11.GL_NO_ERROR) {
+                }
             }
+            if (!copy(src, c)) return;
+            c.srcId = src;
+            c.copied = true;
             pending.remove(i);
+            round.add(c);
+            if (retrySingly) break;
         }
+        if (round.isEmpty()) return;
+        int err = GL11.glGetError();
+        if (err == GL11.GL_NO_ERROR) {
+            diagCopies += round.size();
+            if (pending.isEmpty()) retrySingly = false;
+            return;
+        }
+        // Only a round of one names its culprit; the others go back whole.
+        for (int k = 0; k < round.size(); ++k) {
+            Cell c = round.get(k);
+            c.copied = false;
+            if (round.size() == 1 && ++c.tries >= MAX_TRIES) {
+                c.dead = true;
+            } else {
+                c.readyTick = tick + READY_TICKS;
+                pending.add(c);
+            }
+        }
+        retrySingly = true;
+        if (!copyFailLogged) {
+            copyFailLogged = true;
+            WindSwayMod.trace("depth atlas copy failed, GL error 0x" + Integer.toHexString(err)
+                    + " (" + round.size() + " cells, first " + round.get(0).source.getName() + "), retrying");
+        }
+    }
+
+    // Render thread. The GL objects stay; the atlas content is overwritten
+    // before a cell is sampled again.
+    private static void clearCells() {
+        cells.clear();
+        pending.clear();
+        round.clear();
+        if (slots != null) Arrays.fill(slots, null);
+        used = 0;
+        diagCells = 0;
+        retrySingly = false;
     }
 
     // Null until the copy is done.
@@ -161,7 +223,7 @@ final class DepthAtlas {
             return null;
         }
         c.lastUsed = tick;
-        if (!c.copied) return null;
+        if (c.dead || !c.copied) return null;
         if (c.srcId != id.getID()) {
             queue(c);
             return null;
@@ -169,12 +231,12 @@ final class DepthAtlas {
         return c;
     }
 
-    // Least recently used copied cell past the age.
+    // Least recently used settled cell past the age.
     private static Cell evict() {
         Cell best = null;
         for (int i = 0; i < used; ++i) {
             Cell c = slots[i];
-            if (!c.copied || tick - c.lastUsed < EVICT_AGE) continue;
+            if (!(c.copied || c.dead) || tick - c.lastUsed < EVICT_AGE) continue;
             if (best == null || c.lastUsed < best.lastUsed) best = c;
         }
         if (best == null) return null;
@@ -183,13 +245,18 @@ final class DepthAtlas {
         return best;
     }
 
-    // The engine queued the map's upload from the game thread before this
-    // frame was handed over; the marker lands behind it in the same FIFO.
+    // Render thread (cellFor runs inside a batch build), where the invoke
+    // queue would run a marker inline: the wait is counted in atlas frames.
     private static void queue(Cell c) {
         c.copied = false;
-        c.uploaded = false;
+        c.dead = false;
+        c.tries = 0;
+        c.readyTick = tick + READY_TICKS;
         pending.add(c);
-        RenderThread.queueInvokeOnRenderContext(() -> c.uploaded = true);
+        if (WindSwayMod.debugLog) {
+            WindSwayMod.trace("depth atlas cell claimed for " + c.source.getName()
+                    + " at frame " + IsoCamera.frameState.frameCount);
+        }
     }
 
     private static void init() {
@@ -224,8 +291,14 @@ final class DepthAtlas {
             GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_WRAP_S, GL12.GL_CLAMP_TO_EDGE);
             GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_WRAP_T, GL12.GL_CLAMP_TO_EDGE);
             // Unsized GL_RED like the engine's maps (copy_image needs one format
-            // class). No data: a cell is only sampled once its copy overwrote it.
-            GL11.glTexImage2D(GL11.GL_TEXTURE_2D, 0, GL11.GL_RED, size, size, 0, GL11.GL_RED, GL11.GL_UNSIGNED_BYTE, (ByteBuffer) null);
+            // class). Zeroed: the gutters are never copied into but a tap
+            // can land on them.
+            ByteBuffer zero = MemoryUtil.memCalloc(size * size);
+            try {
+                GL11.glTexImage2D(GL11.GL_TEXTURE_2D, 0, GL11.GL_RED, size, size, 0, GL11.GL_RED, GL11.GL_UNSIGNED_BYTE, zero);
+            } finally {
+                MemoryUtil.memFree(zero);
+            }
             // The batch may return before it invalidates the bind cache.
             Texture.lastTextureID = 0;
             GL11.glBindTexture(GL11.GL_TEXTURE_2D, 0);
@@ -260,14 +333,14 @@ final class DepthAtlas {
             GL30.glDeleteFramebuffers(fboDraw);
             fboDraw = 0;
         }
-        cells.clear();
-        pending.clear();
+        clearCells();
         slots = null;
-        used = 0;
         inited = false;
         mode = MODE_OFF;
     }
 
+    // Issues the copy; the GL error flag is read per round by the caller.
+    // False parks the atlas.
     private static boolean copy(int src, Cell c) {
         int x = c.cx * pitchX();
         int y = c.cy * pitchY();
@@ -281,16 +354,29 @@ final class DepthAtlas {
             int prevRead = GL11.glGetInteger(GL30.GL_READ_FRAMEBUFFER_BINDING);
             boolean scissor = GL11.glIsEnabled(GL11.GL_SCISSOR_TEST);
             if (scissor) GL11.glDisable(GL11.GL_SCISSOR_TEST);
-            GL30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER, fboRead);
-            GL30.glFramebufferTexture2D(GL30.GL_READ_FRAMEBUFFER, GL30.GL_COLOR_ATTACHMENT0, GL11.GL_TEXTURE_2D, src, 0);
-            GL30.glBindFramebuffer(GL30.GL_DRAW_FRAMEBUFFER, fboDraw);
-            GL30.glFramebufferTexture2D(GL30.GL_DRAW_FRAMEBUFFER, GL30.GL_COLOR_ATTACHMENT0, GL11.GL_TEXTURE_2D, texId, 0);
-            GL30.glBlitFramebuffer(0, 0, cellW, cellH, x, y, x + cellW, y + cellH, GL11.GL_COLOR_BUFFER_BIT, GL11.GL_NEAREST);
-            GL30.glFramebufferTexture2D(GL30.GL_READ_FRAMEBUFFER, GL30.GL_COLOR_ATTACHMENT0, GL11.GL_TEXTURE_2D, 0, 0);
-            GL30.glFramebufferTexture2D(GL30.GL_DRAW_FRAMEBUFFER, GL30.GL_COLOR_ATTACHMENT0, GL11.GL_TEXTURE_2D, 0, 0);
-            GL30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER, prevRead);
-            GL30.glBindFramebuffer(GL30.GL_DRAW_FRAMEBUFFER, prevDraw);
-            if (scissor) GL11.glEnable(GL11.GL_SCISSOR_TEST);
+            int readStatus;
+            int drawStatus;
+            try {
+                GL30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER, fboRead);
+                GL30.glFramebufferTexture2D(GL30.GL_READ_FRAMEBUFFER, GL30.GL_COLOR_ATTACHMENT0, GL11.GL_TEXTURE_2D, src, 0);
+                GL30.glBindFramebuffer(GL30.GL_DRAW_FRAMEBUFFER, fboDraw);
+                GL30.glFramebufferTexture2D(GL30.GL_DRAW_FRAMEBUFFER, GL30.GL_COLOR_ATTACHMENT0, GL11.GL_TEXTURE_2D, texId, 0);
+                readStatus = GL30.glCheckFramebufferStatus(GL30.GL_READ_FRAMEBUFFER);
+                drawStatus = GL30.glCheckFramebufferStatus(GL30.GL_DRAW_FRAMEBUFFER);
+                if (readStatus == GL30.GL_FRAMEBUFFER_COMPLETE && drawStatus == GL30.GL_FRAMEBUFFER_COMPLETE) {
+                    GL30.glBlitFramebuffer(0, 0, cellW, cellH, x, y, x + cellW, y + cellH, GL11.GL_COLOR_BUFFER_BIT, GL11.GL_NEAREST);
+                }
+            } finally {
+                GL30.glFramebufferTexture2D(GL30.GL_READ_FRAMEBUFFER, GL30.GL_COLOR_ATTACHMENT0, GL11.GL_TEXTURE_2D, 0, 0);
+                GL30.glFramebufferTexture2D(GL30.GL_DRAW_FRAMEBUFFER, GL30.GL_COLOR_ATTACHMENT0, GL11.GL_TEXTURE_2D, 0, 0);
+                GL30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER, prevRead);
+                GL30.glBindFramebuffer(GL30.GL_DRAW_FRAMEBUFFER, prevDraw);
+                if (scissor) GL11.glEnable(GL11.GL_SCISSOR_TEST);
+            }
+            if (readStatus != GL30.GL_FRAMEBUFFER_COMPLETE || drawStatus != GL30.GL_FRAMEBUFFER_COMPLETE) {
+                throw new IllegalStateException("framebuffer incomplete, read 0x" + Integer.toHexString(readStatus)
+                        + " draw 0x" + Integer.toHexString(drawStatus));
+            }
             return true;
         } catch (Throwable t) {
             WindSwayMod.trace("depth atlas copy failed, atlas off: " + t, t);

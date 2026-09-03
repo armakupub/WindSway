@@ -2,6 +2,7 @@ package pzmod.windsway;
 
 import java.lang.reflect.Field;
 import java.util.ArrayList;
+import java.util.Map;
 
 import me.zed_0xff.zombie_buddy.Accessor;
 import me.zed_0xff.zombie_buddy.Exposer;
@@ -17,12 +18,14 @@ import zombie.debug.DebugType;
 import zombie.debug.LogSeverity;
 import zombie.iso.IsoObject;
 import zombie.iso.IsoWorld;
+import zombie.iso.fboRenderChunk.FBORenderCell;
 import zombie.iso.fboRenderChunk.FBORenderChunk;
 import zombie.iso.objects.IsoTree;
 import zombie.iso.objects.ObjectRenderEffects;
 import zombie.iso.objects.RenderEffectType;
 import zombie.iso.sprite.IsoSprite;
 import zombie.iso.weather.ClimateManager;
+import zombie.iso.weather.WeatherPeriod;
 
 // Kahlua global "WindSwayMod" (simple class name); console calls need
 // the prefix.
@@ -35,24 +38,28 @@ public class WindSwayMod {
         enabled = v;
     }
 
-    private static Field windOptionField;
+    private static Field optionMapField;
 
     // The forced getter would put a tick in the options screen that Apply
-    // writes back into options.ini.
+    // writes back into options.ini, so it is no fallback either. The
+    // option is looked up under its options.ini token, which survives a
+    // field rename.
     public static boolean vanillaWindSpriteEffects() {
         try {
-            Field f = windOptionField;
+            Field f = optionMapField;
             if (f == null) {
-                f = Accessor.findField(Core.class, "optionDoWindSpriteEffects");
-                if (f == null) throw new NoSuchFieldException("optionDoWindSpriteEffects");
+                f = Accessor.findField(Core.class, "optionByName");
+                if (f == null) throw new NoSuchFieldException("optionByName");
                 f.setAccessible(true);
-                windOptionField = f;
+                optionMapField = f;
             }
-            return ((BooleanConfigOption) f.get(Core.getInstance())).getValue();
+            Object opt = ((Map<?, ?>) f.get(Core.getInstance())).get("doWindSpriteEffects");
+            if (opt instanceof BooleanConfigOption) return ((BooleanConfigOption) opt).getValue();
+            trace("vanilla wind option not found: " + opt);
         } catch (Throwable t) {
             trace("vanilla wind option read failed: " + t);
-            return Core.getInstance().getOptionDoWindSpriteEffects();
         }
+        return false;
     }
 
     // The baseline slider: one remap base for the plant channel
@@ -61,20 +68,20 @@ public class WindSwayMod {
     public static volatile double windFloor = 0.2;
 
     public static void setWindFloor(double v) {
-        windFloor = v;
+        windFloor = Math.max(0.0, v);
     }
 
     public static volatile double treeWindFloor = 0.2;
 
     public static void setTreeWindFloor(double v) {
-        treeWindFloor = v;
+        treeWindFloor = Math.max(0.0, v);
     }
 
     // Upper bound of the calm-wind band, shared by both channels.
     public static volatile double windCeil = 0.4;
 
     public static void setWindCeil(double v) {
-        windCeil = v;
+        windCeil = Math.max(0.0, v);
     }
 
     // This tick's wandering breeze (TreeSway), -1 before the first world
@@ -107,13 +114,15 @@ public class WindSwayMod {
         TreeSway.weatherBlend = seconds;
     }
 
-    // Any active weather: a running weather period, precipitation or fog.
+    // Weather that takes the wind over: precipitation, fog or a storm. A
+    // running period alone is not enough, a dry front sets no wind of its
+    // own and would leave the world still under a grey sky.
     static boolean weatherActive() {
         ClimateManager cm = ClimateManager.getInstance();
         if (cm == null) return false;
-        return cm.getWeatherPeriod().isRunning()
-                || cm.getPrecipitationIntensity() > 0.01f
-                || cm.getFogIntensity() > 0.15f;
+        if (cm.getPrecipitationIntensity() > 0.01f || cm.getFogIntensity() > 0.15f) return true;
+        WeatherPeriod wp = cm.getWeatherPeriod();
+        return wp != null && (wp.isThunderStorm() || wp.isTropicalStorm() || wp.isBlizzard());
     }
 
     // Console tuning hooks.
@@ -290,13 +299,18 @@ public class WindSwayMod {
     public static void setBushSway(double ampMax, double pow, double periodSeconds) {
         TreeSway.bushAmpMax = ampMax;
         TreeSway.bushAmpPow = pow;
-        TreeSway.bushPeriod = periodSeconds;
+        TreeSway.bushPeriod = Math.max(0.05, periodSeconds);
+    }
+
+    public static void setBushStiffness(double type2, double type3) {
+        TreeSway.poolStiff2 = type2;
+        TreeSway.poolStiff3 = type3;
     }
 
     public static void setPlantSway(double ampMax, double pow, double periodSeconds) {
         TreeSway.plantAmpMax = ampMax;
         TreeSway.plantAmpPow = pow;
-        TreeSway.plantPeriod = periodSeconds;
+        TreeSway.plantPeriod = Math.max(0.05, periodSeconds);
     }
 
     public static void setPlantStiffness(double type2, double type3) {
@@ -526,7 +540,7 @@ public class WindSwayMod {
     }
 
     public static void setTreeStormSway(double onset, double gain, double hold) {
-        TreeSway.stormOnset = onset;
+        TreeSway.stormOnset = Math.min(0.99, onset);
         TreeSway.stormGain = gain;
         TreeSway.stormHold = hold;
     }
@@ -630,6 +644,8 @@ public class WindSwayMod {
         TreeSway.periodRefH = refH;
     }
 
+    // Console only, this and the three below: the arrays are read by the
+    // render thread without a fence, a change shows when it shows.
     // 0 cone (holly), 1 pendulous (hemlock), 2 pine, 3 fine (birch, redbud,
     // silverbell), 4 dense (maple, linden, yellowwood), 5 understory
     // (hawthorn, dogwood).
@@ -711,11 +727,7 @@ public class WindSwayMod {
     }
 
     public static void setTreeQuality(boolean lobes, boolean octave2, boolean leaves, boolean mask, boolean shade) {
-        TreeRenderer.qualLobes = lobes;
-        TreeRenderer.qualOctave2 = octave2;
-        TreeRenderer.qualLeaves = leaves;
-        TreeRenderer.qualMask = mask;
-        TreeRenderer.qualShade = shade;
+        TreeRenderer.setQuality(lobes, octave2, leaves, mask, shade);
     }
 
     public static volatile boolean plantBendOn = true;
@@ -800,9 +812,10 @@ public class WindSwayMod {
             double gP = rustleGain(Math.max(0.0, Math.min(1.0, (plantCh - 0.02) / 0.98)));
             lastRustleGain = gT;
             // randomRustle jitters flora with no visible cause; it only
-            // ever feeds the tree-family pools, so undo it fully.
+            // ever feeds the tree-family pools, so undo it fully. Not on
+            // vanilla's pools when the model is off.
             Object rr = rrField.get(null);
-            if (rr != null) {
+            if (rr != null && TreeSway.isOk()) {
                 int t = rrTypeField.getInt(null);
                 int i = rrTargetField.getInt(null);
                 ObjectRenderEffects[][] pools = (ObjectRenderEffects[][]) treePoolsField.get(null);
@@ -897,8 +910,11 @@ public class WindSwayMod {
             }
             // While the tree renderer draws, the shared pool sway is
             // replaced by the per-tree field; only per-object effects
-            // (axe shudder) travel through the ORE.
-            ObjectRenderEffects pool = TreeRenderer.active() ? poolOf(ore) : null;
+            // (axe shudder) travel through the ORE. Chunk bakes build
+            // their lists outside the translucent pass and vanilla draws
+            // them: they keep the pool sway.
+            ObjectRenderEffects pool = TreeRenderer.active() && FBORenderCell.instance.renderTranslucentOnly
+                    ? poolOf(ore) : null;
             if (pool == ore) return null;
             if (pool == null && f == 1.0) return ore;
             ObjectRenderEffects scratch = treeOreScratch;
@@ -962,6 +978,14 @@ public class WindSwayMod {
         rustleOk = true;
         treeOreScaleOk = true;
         BatchSequencer.rearm();
+        GrassCapture.rearm();
+        PlantClass.clearCache();
+        BushGenus.clearCache();
+        TreeRenderer.requestClear();
+        TreeSway.resetClocks();
+        firstTreeScaleLogged = false;
+        enqueueFailedLogged = false;
+        TreeRenderer.pageMissLogged = 0;
     }
 
     private static IsoWorld lastWorld;
@@ -975,7 +999,7 @@ public class WindSwayMod {
             TreeRenderer.initHandles();
             TreeProfile.warm();
             if (SpriteRenderer.instance != null) {
-                SpriteRenderer.instance.drawGeneric(new WindSwayGrassDrawer());
+                WindSwayGrassDrawer.probe();
                 SpriteRenderer.instance.drawGeneric(new TreeRenderer.WarmDrawer());
             }
         } catch (Throwable t) {
@@ -1038,6 +1062,9 @@ public class WindSwayMod {
         GrassCapture.wallCapture = on;
     }
 
+    // The drain and the per-world re-arm run whatever the switch says: a
+    // world entered with the mod off must find fresh latches and compiled
+    // shaders when the options screen turns it on.
     public static void onTranslucentPassDone(int playerIndex, int z) {
         try {
             long t0 = debugLog ? System.nanoTime() : 0L;

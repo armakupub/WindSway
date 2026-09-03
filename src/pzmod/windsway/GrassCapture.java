@@ -10,6 +10,7 @@ import zombie.core.Core;
 import zombie.core.math.PZMath;
 import zombie.core.opengl.RenderSettings;
 import zombie.core.opengl.Shader;
+import zombie.core.properties.RoofProperties;
 import zombie.core.textures.ColorInfo;
 import zombie.core.textures.Texture;
 import zombie.characters.IsoGameCharacter;
@@ -140,6 +141,8 @@ public final class GrassCapture {
         if (!WindSwayMod.enabled || !wallCapture) return false;
         try {
             if (!FBORenderCell.instance.renderTranslucentOnly) return false;
+            // The highlight pass raises the same flag before the z loop.
+            if (FBORenderObjectHighlight.getInstance().isRendering()) return false;
             if (!Core.getInstance().getOptionDoWindSpriteEffects()) return false;
             if (!WindSwayGrassDrawer.ready()) return false;
             if (IsoSprite.seamFix2 != null) return false;
@@ -179,6 +182,7 @@ public final class GrassCapture {
             if (object.getOverlaySprite() != null) return DebugStats.reject("wall:overlay", sprite);
             ArrayList<IsoSpriteInstance> attachments = object.getAttachedAnimSprite();
             if (attachments != null && !attachments.isEmpty()) return DebugStats.reject("wall:attached", sprite);
+            if (object.wallBloodSplats != null && !object.wallBloodSplats.isEmpty()) return DebugStats.reject("wall:blood", sprite);
             if (object.hasAnimatedAttachments()) return DebugStats.reject("animAttach", sprite);
             // renderWallTile draws nothing for these; vanilla still ends
             // the object at alpha 1.
@@ -295,18 +299,7 @@ public final class GrassCapture {
             // renderMinusFloor_DoorOrWall: setAlphaAndTarget(target),
             // performDrawWallOnly ends with setAlpha(1); target is 1 here.
             object.setAlphaAndTarget(playerIndex, 1.0f);
-            if (!WeatherFxMask.isRenderingMask()
-                    && !FBORenderObjectHighlight.getInstance().isRendering()
-                    && !FBORenderObjectOutline.getInstance().isRendering()) {
-                ObjectRenderInfo ri = object.getRenderInfo(playerIndex);
-                ri.renderX = pickerX;
-                ri.renderY = pickerY;
-                ri.renderWidth = wOrig * scaleX;
-                ri.renderHeight = hOrig * scaleY;
-                ri.renderScaleX = scaleX;
-                ri.renderScaleY = scaleY;
-                ri.renderAlpha = 1.0f;
-            }
+            writePicker(object, playerIndex, pickerX, pickerY, wOrig, hOrig, scaleX, scaleY, 1.0f);
             wallNoPicking(object, sprite, square, playerIndex, cutN, cutW);
             return true;
         } catch (Throwable t) {
@@ -320,10 +313,33 @@ public final class GrassCapture {
 
     private static volatile boolean wallCaptureFailedLogged = false;
 
+    // Object-picker click box, normally refilled by the draw we skip;
+    // vanilla leaves it alone only at alpha 0.
+    private static void writePicker(IsoObject object, int playerIndex, float x, float y,
+            float wOrig, float hOrig, float scaleX, float scaleY, float alpha) {
+        if (alpha == 0.0f) return;
+        if (WeatherFxMask.isRenderingMask()
+                || FBORenderObjectHighlight.getInstance().isRendering()
+                || FBORenderObjectOutline.getInstance().isRendering()) return;
+        ObjectRenderInfo ri = object.getRenderInfo(playerIndex);
+        ri.renderX = x;
+        ri.renderY = y;
+        ri.renderWidth = wOrig * scaleX;
+        ri.renderHeight = hOrig * scaleY;
+        ri.renderScaleX = scaleX;
+        ri.renderScaleY = scaleY;
+        ri.renderAlpha = alpha;
+    }
+
     // One-entry memo: captures arrive square by square and the ground-snow
     // lookup walks square flags and the chunk snow grid.
     private static IsoGridSquare snowMemoSquare;
     private static boolean snowMemoSnowy;
+
+    // Per world: the memo pins a square of the old one.
+    static void rearm() {
+        snowMemoSquare = null;
+    }
     private static final float[] wallCornerScratch = new float[12];
 
     private static void unpackABGR(int abgr, float[] out, int at) {
@@ -414,6 +430,11 @@ public final class GrassCapture {
         if (!WindSwayMod.enabled) return false;
         try {
             if (!FBORenderCell.instance.renderTranslucentOnly) return false;
+            // FBORenderObjectHighlight.render raises the same flag before
+            // the z loop and draws the highlighted square's neighbours
+            // through renderTranslucent: a capture there would land in the
+            // wrong pass and draw twice.
+            if (FBORenderObjectHighlight.getInstance().isRendering()) return false;
             if (!Core.getInstance().getOptionDoWindSpriteEffects()) return false;
             if (!WindSwayGrassDrawer.ready()) return false;
             // setupTileDepth's special-object list (chunk depth or own
@@ -455,6 +476,23 @@ public final class GrassCapture {
                     || sprite.getProperties().has(IsoFlagType.WallOverlay)) {
                 return DebugStats.reject("wallDepth", sprite);
             }
+            // renderMinusFloor_NotDoorOrWall draws the joined neighbour of
+            // a roof tile before the tile itself (same level at a chunk
+            // edge, the level below anywhere); the skip would drop that
+            // seam.
+            RoofProperties roof = sprite.getRoofProperties();
+            if (roof != null && (PZMath.coordmodulo(square.x, 8) == 7 && roof.hasPossibleSeamSameLevel(IsoDirections.E)
+                    || PZMath.coordmodulo(square.y, 8) == 7 && roof.hasPossibleSeamSameLevel(IsoDirections.S)
+                    || roof.hasPossibleSeamLevelBelow(IsoDirections.E)
+                    || roof.hasPossibleSeamLevelBelow(IsoDirections.S))) {
+                return DebugStats.reject("roof", sprite);
+            }
+            // renderAttachedSprites draws blood splats and children after
+            // the parts; children is protected, no gate for it.
+            if (object.wallBloodSplats != null && !object.wallBloodSplats.isEmpty()) return DebugStats.reject("blood", sprite);
+            // OpaquePixelsOnly: vanilla swaps to opaqueDepthShader with an
+            // alpha > 0.8 cut the batch shader has not.
+            if ((sprite.depthFlags & 4) != 0) return DebugStats.reject("opaque", sprite);
             // Animated attachments draw via a separate engine call after
             // renderMinusFloor that our skip does not cover; capturing the
             // body would flush it behind its own attachments.
@@ -478,20 +516,11 @@ public final class GrassCapture {
 
             // Vanilla draws with pre-step alpha and steps afterwards; step
             // only on paths that return true, on fallback vanilla steps
-            // itself.
+            // itself. WestRoofT snaps to its target instead.
             float target = object.getRenderInfo(playerIndex).targetAlpha;
             object.setTargetAlpha(playerIndex, target);
+            if (object.getType() == IsoObjectType.WestRoofT) object.setAlphaAndTarget(playerIndex, target);
             float alpha = object.getAlpha(playerIndex);
-            if (alpha <= 0.01f) {
-                if (WindSwayMod.debugLog) DebugStats.diagAlphaSkips++;
-                stepAlphaLikeVanilla(object, square, playerIndex, target);
-                return true;
-            }
-
-            // All-or-nothing: any undrawable part sends the whole object
-            // back to vanilla, half objects read as holes.
-            ArrayList<IsoSpriteInstance> attachments = object.getAttachedAnimSprite();
-            int attachedCount = attachments != null ? attachments.size() : 0;
 
             // Vanilla reuses obj.sx from the main draw for attachments;
             // their instance offsets never enter the anchor.
@@ -506,6 +535,19 @@ public final class GrassCapture {
             // Picker anchor: vanilla sx - offX, no jiggly term.
             float pickerX = baseSx;
             float pickerY = baseSy;
+            if (alpha <= 0.01f) {
+                if (WindSwayMod.debugLog) DebugStats.diagAlphaSkips++;
+                writePicker(object, playerIndex, pickerX, pickerY, wOrig, hOrig, scaleX, scaleY, alpha);
+                stepAlphaLikeVanilla(object, square, playerIndex, target);
+                return true;
+            }
+
+            // All-or-nothing: any undrawable part sends the whole object
+            // back to vanilla, half objects read as holes. IsoObject.render
+            // leaves out the attachments of a chair someone sits on.
+            ArrayList<IsoSpriteInstance> attachments = object.getAttachedAnimSprite();
+            int attachedCount = attachments != null && !object.isSatChair() ? attachments.size() : 0;
+
             float zoom = IsoCamera.frameState.zoom;
             baseSx += camera.fixJigglyModelsX * zoom;
             baseSy += camera.fixJigglyModelsY * zoom;
@@ -594,6 +636,13 @@ public final class GrassCapture {
                 lg = ambient * object.tintg;
                 lb = ambient * object.tintb;
             }
+            // renderCurrentAnim: an unlit sprite draws white, whatever
+            // colour the object arrived with. Per part.
+            if (sprite.getProperties().has(IsoFlagType.unlit)) {
+                lr = 1.0f;
+                lg = 1.0f;
+                lb = 1.0f;
+            }
 
             // Corner fractions get copied in buildPart: the shared pools
             // mutate on the game thread while the render thread draws.
@@ -626,10 +675,12 @@ public final class GrassCapture {
             if (overlay != null) {
                 IsoSpriteInstance odef = overlay.def;
                 if (odef == null) return DebugStats.reject("overlayPart", overlay);
+                if ((overlay.depthFlags & 4) != 0) return DebugStats.reject("opaque", overlay);
                 Texture otex = overlay.getTextureForCurrentFrame(object.getDir(), object);
                 if (otex == null || otex.getTextureId() == null) return DebugStats.reject("overlayPart", overlay);
                 Texture odepth = selectDepthTexture(overlay, object);
-                if (odepth == null || odepth.getTextureId() == null) return DebugStats.reject("overlayPart", overlay);
+                if (odepth == null) return DebugStats.reject(wallDepth(overlay) ? "wallDepth" : "overlayPart", overlay);
+                if (odepth.getTextureId() == null) return DebugStats.reject("overlayPart", overlay);
                 float ocr = liR * fade * fade;
                 float ocg = liG * fade * fade;
                 float ocb = liB * fade * fade;
@@ -640,6 +691,11 @@ public final class GrassCapture {
                     ocg = osc.g * ownG * fade;
                     ocb = osc.b * ownB * fade;
                     oFactor = osc.a;
+                }
+                if (overlay.getProperties().has(IsoFlagType.unlit)) {
+                    ocr = 1.0f;
+                    ocg = 1.0f;
+                    ocb = 1.0f;
                 }
                 float oAlpha = alpha;
                 if (odef.copyTargetAlpha && oFactor != 1.0f) {
@@ -669,10 +725,12 @@ public final class GrassCapture {
                         frame = (int) s.frame;
                     }
                 }
+                if ((spr.depthFlags & 4) != 0) return DebugStats.reject("opaque", spr);
                 Texture tex2 = spr.getTextureForFrame(frame, object.getDir(), object.isUseSnowSprite());
                 if (tex2 == null || tex2.getTextureId() == null) return DebugStats.reject("attachPart", spr);
                 Texture depthTex2 = selectDepthTexture(spr, object);
-                if (depthTex2 == null || depthTex2.getTextureId() == null) return DebugStats.reject("attachPart", spr);
+                if (depthTex2 == null) return DebugStats.reject(wallDepth(spr) ? "wallDepth" : "attachPart", spr);
+                if (depthTex2.getTextureId() == null) return DebugStats.reject("attachPart", spr);
                 // IsoSpriteInstance.renderprep runs inside the draw we skip:
                 // a copyTargetAlpha instance takes the object's alpha every
                 // frame, the others step toward their own target. Read raw,
@@ -702,10 +760,14 @@ public final class GrassCapture {
                 // quad itself uses the instance scale (vanilla asymmetry).
                 float uvSX = spr.def != null ? spr.def.scaleX : 1.0f;
                 float uvSY = spr.def != null ? spr.def.scaleY : 1.0f;
+                boolean unlit = spr.getProperties().has(IsoFlagType.unlit);
+                float ar = unlit ? 1.0f : liR * fade;
+                float ag = unlit ? 1.0f : liG * fade;
+                float ab = unlit ? 1.0f : liB * fade;
                 parts.add(buildPart(tex2, depthTex2, spr, baseSx, baseSy,
                         sX2, sY2, uvSX, uvSY, s.flip,
                         zNear, zFar, ore,
-                        liR * fade * s.tintr, liG * fade * s.tintg, liB * fade * s.tintb, a2));
+                        ar * s.tintr, ag * s.tintg, ab * s.tintb, a2));
                 if (windClass >= 0) {
                     WindSwayGrassDrawer.GrassQuad aq = parts.get(parts.size() - 1);
                     aq.cls = PlantClass.of(spr);
@@ -750,20 +812,7 @@ public final class GrassCapture {
                 }
             }
             parts.clear();
-            // Object-picker click boxes; normally refilled by the draw
-            // we skip.
-            if (!WeatherFxMask.isRenderingMask()
-                    && !FBORenderObjectHighlight.getInstance().isRendering()
-                    && !FBORenderObjectOutline.getInstance().isRendering()) {
-                ObjectRenderInfo ri = object.getRenderInfo(playerIndex);
-                ri.renderX = pickerX;
-                ri.renderY = pickerY;
-                ri.renderWidth = wOrig * scaleX;
-                ri.renderHeight = hOrig * scaleY;
-                ri.renderScaleX = scaleX;
-                ri.renderScaleY = scaleY;
-                ri.renderAlpha = alpha;
-            }
+            writePicker(object, playerIndex, pickerX, pickerY, wOrig, hOrig, scaleX, scaleY, alpha);
             // Vanilla advances attachment anims inside the skipped draw.
             for (int i = 0; i < attachedCount; ++i) {
                 IsoSpriteInstance s = attachments.get(i);
@@ -892,7 +941,7 @@ public final class GrassCapture {
             q.bendPow = bendPow;
             q.bladeVar = bladeVar;
             int pc = q.cls < 0 ? cls : q.cls;
-            PlantClass.diag[pc]++;
+            if (WindSwayMod.debugLog) PlantClass.diag[pc]++;
             q.tipF = (float) PlantClass.tip[pc];
             q.sheenF = (float) PlantClass.sheen[pc];
             q.dampF = dampF;
@@ -1034,6 +1083,14 @@ public final class GrassCapture {
         return result;
     }
 
+    // setupTileDepth hands windows and wall overlays that found no map
+    // above to setupWallDepth: directional wall depth, not replicated.
+    private static boolean wallDepth(IsoSprite spr) {
+        return spr.getProperties().has(IsoFlagType.windowN) || spr.getProperties().has(IsoFlagType.windowW)
+                || spr.getProperties().has(IsoFlagType.WallOverlay)
+                && (spr.getProperties().has(IsoFlagType.attachedN) || spr.getProperties().has(IsoFlagType.attachedW));
+    }
+
     // setupTileDepth's selection chain, reduced to the branches grass
     // and its attachments can hit.
     private static Texture selectDepthTexture(IsoSprite spr, IsoObject object) {
@@ -1055,6 +1112,7 @@ public final class GrassCapture {
                 return main.depthTexture.getTexture();
             }
         }
+        if (wallDepth(spr)) return null;
         TileDepthTexture def = TileDepthTextureManager.getInstance().getDefaultDepthTexture();
         if (def != null && !def.isEmpty()) {
             return def.getTexture();
@@ -1096,6 +1154,8 @@ public final class GrassCapture {
         q.u1 = tex.getXEnd();
         q.v0 = tex.getYStart();
         q.v1 = tex.getYEnd();
+        // IsoDirectionFrame.doFlip is false only for IsoAnim's multi-texture
+        // frames, which belong to moving objects: never captured.
         if (flip) {
             float t = q.u0;
             q.u0 = q.u1;

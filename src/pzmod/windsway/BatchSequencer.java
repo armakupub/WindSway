@@ -298,9 +298,7 @@ public final class BatchSequencer {
                 }
             }
         } finally {
-            segCount = 0;
-            treeBoxCount = 0;
-            wallSinceValid = false;
+            releaseSegments();
             treeFlushing = false;
         }
     }
@@ -596,15 +594,22 @@ public final class BatchSequencer {
     }
 
     private static void dropStaleSegments() {
-        // A pass that ended without its OnExit left these behind; the lists
-        // were never queued, so vanilla's release is ours to call.
+        // A pass that ended without its OnExit left these behind.
         WindSwayMod.trace("stale tree lists dropped");
+        releaseSegments();
+    }
+
+    // Lists still held were never queued (a throw mid-drain leaves the
+    // tail behind), so vanilla's release is ours to call.
+    private static void releaseSegments() {
         for (int i = 0; i < segCount; ++i) {
+            FBORenderTrees seg = segList[i];
+            segList[i] = null;
+            if (seg == null) continue;
             try {
-                segList[i].postRender();
+                seg.postRender();
             } catch (Throwable ignored) {
             }
-            segList[i] = null;
         }
         segCount = 0;
         treeBoxCount = 0;

@@ -232,6 +232,14 @@ public final class TreeRenderer {
     public static volatile boolean qualOctave2 = true;
     public static volatile boolean qualLeaves = true;
     public static volatile boolean qualMask = true;
+
+    static void setQuality(boolean lobes, boolean octave2, boolean leaves, boolean mask, boolean shade) {
+        qualLobes = lobes;
+        qualOctave2 = octave2;
+        qualLeaves = leaves;
+        qualMask = mask;
+        qualShade = shade;
+    }
     public static volatile boolean qualShade = true;
     // Floor strip depth offset, linear from the split row to the frame
     // bottom. Vanilla subtracts a constant 0.0015 from the whole strip:
@@ -242,11 +250,12 @@ public final class TreeRenderer {
     public static volatile double floorHackTop = 0.0006;
     public static volatile double floorHackBottom = 0.0015;
 
-    // 5s log counters, written on the render thread only.
-    public static volatile int diagRenders;
-    public static volatile int diagTrees;
-    public static volatile int diagDraws;
-    public static volatile int diagMaxTrees;
+    // 5s log counters, written on the render thread; the log reads them
+    // from the game thread as they come.
+    static int diagRenders;
+    static int diagTrees;
+    static int diagDraws;
+    static int diagMaxTrees;
     static final int[] diagClass = new int[TreeClass.COUNT];
     static final int[] diagSeason = new int[TreeProfile.SEASON_NONE + 1];
 
@@ -275,17 +284,25 @@ public final class TreeRenderer {
     private static volatile boolean ok = true;
     private static Shader shader;
     private static ShaderProgram program;
+    private static int programId;
     private static final WindSwayMod.GlProbe glProbe = new WindSwayMod.GlProbe();
+    private static volatile boolean rearmRequested;
+    private static volatile boolean clearRequested;
 
     // Game thread. After a latch: init again, once per new world or on
-    // request from the console.
+    // request from the console. The shader is the render thread's, it
+    // drops it at its next list.
     static void rearm() {
         if (ok) return;
-        shader = null;
-        program = null;
-        glProbe.reset();
+        rearmRequested = true;
         ok = true;
         WindSwayMod.trace("tree renderer re-armed, trying again");
+    }
+
+    // Game thread, per world: the texture-keyed caches are the render
+    // thread's.
+    static void requestClear() {
+        clearRequested = true;
     }
 
     // True while trees are drawn here; addTree then strips the shared pool
@@ -684,6 +701,22 @@ public final class TreeRenderer {
         if (!program.isCompiled() && !WindSwayMod.recompileShaderWithLog(program)) {
             throw new IllegalStateException("windsway_tree shader not compiled");
         }
+        programId = program.getShaderID();
+        lookupUniforms();
+        LeafMaskAtlas.ensure();
+        if (!glInfoLogged) {
+            glInfoLogged = true;
+            WindSwayMod.trace("GL: " + GL11.glGetString(GL11.GL_RENDERER)
+                    + ", max varying floats " + GL11.glGetInteger(GL20.GL_MAX_VARYING_FLOATS)
+                    + ", max vertex attribs " + GL11.glGetInteger(GL20.GL_MAX_VERTEX_ATTRIBS)
+                    + ", max texture units " + GL11.glGetInteger(GL20.GL_MAX_TEXTURE_IMAGE_UNITS)
+                    + ", timer queries " + (GpuTimer.supported() ? "yes" : "no"));
+        }
+    }
+
+    // Also after a recompile: the locations move and the sampler units are
+    // dropped.
+    private static void lookupUniforms() {
         ShaderProgram.Uniform u;
         u = program.getUniform("uParams", 35666);
         uParams = u == null ? -1 : u.loc;
@@ -724,15 +757,6 @@ public final class TreeRenderer {
         program.setSamplerUnit("DIFFUSE", 0);
         program.setSamplerUnit("MASK", 1);
         shader.End();
-        LeafMaskAtlas.ensure();
-        if (!glInfoLogged) {
-            glInfoLogged = true;
-            WindSwayMod.trace("GL: " + GL11.glGetString(GL11.GL_RENDERER)
-                    + ", max varying floats " + GL11.glGetInteger(GL20.GL_MAX_VARYING_FLOATS)
-                    + ", max vertex attribs " + GL11.glGetInteger(GL20.GL_MAX_VERTEX_ATTRIBS)
-                    + ", max texture units " + GL11.glGetInteger(GL20.GL_MAX_TEXTURE_IMAGE_UNITS)
-                    + ", timer queries " + (GpuTimer.supported() ? "yes" : "no"));
-        }
     }
 
     private static void fail(Throwable t) {
@@ -755,7 +779,23 @@ public final class TreeRenderer {
     // the list was drawn (or is empty) and vanilla must skip.
     public static boolean render(FBORenderTrees self) {
         if (!WindSwayMod.enabled || !warp || !ok) return false;
-        if (FBORenderChunkManager.instance.renderThreadCurrent != null) return false;
+        try {
+            if (FBORenderChunkManager.instance.renderThreadCurrent != null) return false;
+        } catch (Throwable t) {
+            fail(t);
+            return false;
+        }
+        if (clearRequested) {
+            clearRequested = false;
+            TreeProfile.clearCache();
+            LeafMaskAtlas.clearCache();
+        }
+        if (rearmRequested) {
+            rearmRequested = false;
+            shader = null;
+            program = null;
+            glProbe.reset();
+        }
         ArrayList<?> trees;
         int vertCount;
         boolean diag = WindSwayMod.debugLog;
@@ -1017,7 +1057,8 @@ public final class TreeRenderer {
                 // Leaf cell from the blade length (64 px per world unit), grown
                 // with the sprite like the branch cell; packed in half pixels
                 // above rate (0.5..1.5) + 2 * floor(g * 63).
-                double cellPx = TreeSpecies.leafCm(sp) * PX_PER_CM * Math.pow(branchCell / lobeRefCell, leafCellExp);
+                double cellGrow = Math.pow(branchCell / lobeRefCell, leafCellExp);
+                double cellPx = TreeSpecies.leafCm(sp) * PX_PER_CM * cellGrow;
                 if (cellPx < leafCellMin) cellPx = leafCellMin;
                 if (cellPx > 31.0) cellPx = 31.0;
                 // Cluster cell over the painted leaf size: dabs move as twig
@@ -1029,9 +1070,9 @@ public final class TreeRenderer {
                 if (paint > 0.0) {
                     double t = smooth(clusterPaintLo, clusterPaintHi, paint);
                     snap = (float) (clusterSnap * (1.0 - t));
-                    clusterCell = Math.max(cellPx, clusterPx * Math.pow(branchCell / lobeRefCell, leafCellExp) * (1.0 - t));
+                    clusterCell = Math.max(cellPx, clusterPx * cellGrow * (1.0 - t));
                 }
-                leafPx *= (float) Math.pow(clusterCell / cellPx, clusterAmpPow);
+                if (clusterAmpPow != 0.0) leafPx *= (float) Math.pow(clusterCell / cellPx, clusterAmpPow);
                 float flickPx = 0.0f;
                 float flickCell = 0.0f;
                 if (profile.leafy && !refProfile.conifer) {
@@ -1116,8 +1157,10 @@ public final class TreeRenderer {
                 float branchV = (float) (branchPx * lobeYShare) * texelV;
                 float leafU = leafPx * texelU;
                 float leafV = 0.3f * leafPx * texelV;
-                float pixL = -padL + seedX;
-                float pixR = w + padR + seedX;
+                // Lattice origin on the sprite, not the part: base and
+                // overlay are trimmed differently and must share the phase.
+                float pixL = offX - padL + seedX;
+                float pixR = offX + w + padR + seedX;
 
                 // Vanilla segments: base sprite in two pieces split above the
                 // floor strip (the lower piece sits nearer, floorHackTop to
@@ -1267,16 +1310,21 @@ public final class TreeRenderer {
         stage.position(0);
         stage.limit(bytes);
 
-        Matrix4f p = Core.getInstance().projectionMatrixStack.alloc();
-        p.set(proj);
-        Core.getInstance().projectionMatrixStack.push(p);
-        Matrix4f m = Core.getInstance().modelViewMatrixStack.alloc();
-        m.set(mvCommon);
-        Core.getInstance().modelViewMatrixStack.push(m);
-        double calArea = TreeDetail.timingArea(gpuTimer, listArea);
         boolean withVao = useVao && vaoOk();
-        boolean timed = (diag || calArea > 0.0) && gpuTimer.begin(calArea);
+        boolean timed = false;
+        boolean pushed = false;
         try {
+            Matrix4f p = Core.getInstance().projectionMatrixStack.alloc();
+            p.set(proj);
+            Matrix4f m = Core.getInstance().modelViewMatrixStack.alloc();
+            m.set(mvCommon);
+            Core.getInstance().projectionMatrixStack.push(p);
+            Core.getInstance().modelViewMatrixStack.push(m);
+            pushed = true;
+            // The one-shot calibration only with the log on: its timer
+            // queries poll the driver until the window closes.
+            double calArea = diag ? TreeDetail.timingArea(gpuTimer, listArea) : 0.0;
+            timed = (diag || calArea > 0.0) && gpuTimer.begin(calArea);
             boolean glCheck = glProbe.begin();
             GL13.glActiveTexture(GL13.GL_TEXTURE0);
             GL11.glDepthMask(true);
@@ -1327,6 +1375,11 @@ public final class TreeRenderer {
                 }
             }
 
+            int pid = program.getShaderID();
+            if (pid != programId) {
+                programId = pid;
+                lookupUniforms();
+            }
             shader.Start();
             VertexBufferObject.setModelViewProjection(shader);
             float[] u = uNow;
@@ -1483,8 +1536,10 @@ public final class TreeRenderer {
                 } catch (Throwable ignored) {
                 }
             }
-            Core.getInstance().modelViewMatrixStack.pop();
-            Core.getInstance().projectionMatrixStack.pop();
+            if (pushed) {
+                Core.getInstance().modelViewMatrixStack.pop();
+                Core.getInstance().projectionMatrixStack.pop();
+            }
             releaseRuns();
             GLStateRenderThread.restore();
             // The flags are not consumed between two generic drawers; without
@@ -1533,9 +1588,9 @@ public final class TreeRenderer {
         return bound;
     }
 
-    public static volatile int diagBinds;
-    public static volatile int diagPageMiss;
-    private static int pageMissLogged;
+    static int diagBinds;
+    static int diagPageMiss;
+    static int pageMissLogged;
 
     // Raw bind, NEAREST once per GL texture: TextureID.bind() rewrites four
     // sampler parameters on a page the previous draw still reads, which
