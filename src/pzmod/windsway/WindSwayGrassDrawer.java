@@ -821,6 +821,16 @@ public class WindSwayGrassDrawer extends TextureDraw.GenericDrawer {
     // the shadow drawer samples our last page.
     private static void teardown(boolean withVao) {
         try {
+            // The engine rebinds unit 0 only. A shader whose samplers it
+            // never binds (VVA's window shader with reflections off) keeps
+            // reading whatever a batch left on the upper units.
+            for (int u = 1; u < unitBound.length; ++u) {
+                if (unitBound[u] == -1) continue;
+                GL13.glActiveTexture(GL13.GL_TEXTURE0 + u);
+                GL11.glBindTexture(GL11.GL_TEXTURE_2D, 0);
+                unitBound[u] = -1;
+            }
+            unitBound[0] = -1;
             GL13.glActiveTexture(GL13.GL_TEXTURE0);
             if (withVao) {
                 GL30.glBindVertexArray(0);

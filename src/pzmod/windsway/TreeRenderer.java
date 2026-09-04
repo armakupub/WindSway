@@ -820,7 +820,13 @@ public final class TreeRenderer {
         try {
             if (shader == null) init();
             trees = (ArrayList<?>) H.trees.invokeExact(self);
-            if (trees.isEmpty()) return true;
+            if (trees.isEmpty()) {
+                // Vanilla's render() restores the tracked state even for an
+                // empty list; the corpse atlas job leaves raw depth state
+                // behind that only this heals.
+                GLStateRenderThread.restore();
+                return true;
+            }
             vertCount = build(self, trees);
         } catch (Throwable t) {
             fail(t);
@@ -1563,6 +1569,12 @@ public final class TreeRenderer {
                 Core.getInstance().projectionMatrixStack.pop();
             }
             releaseRuns();
+            try {
+                GL13.glActiveTexture(GL13.GL_TEXTURE1);
+                GL11.glBindTexture(GL11.GL_TEXTURE_2D, 0);
+                GL13.glActiveTexture(GL13.GL_TEXTURE0);
+            } catch (Throwable ignored) {
+            }
             GLStateRenderThread.restore();
             // The flags are not consumed between two generic drawers; without
             // the cache invalidation the shadow drawer samples our last page.

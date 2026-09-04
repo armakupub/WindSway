@@ -1077,11 +1077,22 @@ public class WindSwayMod {
         }
         if (now - heartbeatMs < 300000L) return;
         heartbeatMs = now;
+        status();
+    }
+
+    private static void status() {
         trace("status: " + TreeRenderer.glInfo + " | enabled=" + enabled
                 + " | trees " + TreeRenderer.statusLine()
                 + " | grass " + WindSwayGrassDrawer.statusLine()
                 + " | atlas " + DepthAtlas.statusLine()
                 + " | glErrors=" + glErrors);
+    }
+
+    // A session shorter than the heartbeat still leaves one status line.
+    public static void onLuaReload() {
+        if (enabled && heartbeatMs != 0L) status();
+        enabled = false;
+        heartbeatMs = 0L;
     }
 
     public static void setFlushPrecise(boolean v) {

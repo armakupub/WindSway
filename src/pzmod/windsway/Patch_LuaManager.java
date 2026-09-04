@@ -15,7 +15,7 @@ public class Patch_LuaManager {
 
         @Patch.OnEnter(skipOn = true)
         public static boolean enter() {
-            WindSwayMod.enabled = false;
+            WindSwayMod.onLuaReload();
             return false;
         }
     }
