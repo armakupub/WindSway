@@ -5,6 +5,7 @@ import java.util.IdentityHashMap;
 import me.zed_0xff.zombie_buddy.Accessor;
 
 import zombie.GameTime;
+import zombie.characters.IsoPlayer;
 import zombie.iso.objects.ObjectRenderEffects;
 
 // Tree wind and sway, stateless: every value comes from (clocks, position).
@@ -162,6 +163,12 @@ public final class TreeSway {
     public static volatile double breezePeriod = 240.0;
     public static volatile double breezePeriodFine = 60.0;
     public static volatile double breezeFineWeight = 0.3;
+    // The wind sound swings around the wind with the gust field at the
+    // player: down * w in a lull, up * w in a gust, capped at 1. The wind
+    // bed is a step ladder without crossfades (0.4/0.7/0.9), a gust is
+    // heard when it crosses a step; the plateau at the cap is the top step.
+    public static volatile double soundGustDown = 0.3;
+    public static volatile double soundGustUp = 0.3;
     // Weather takes the wind over: the band fades out while a weather
     // period, precipitation or fog runs, back in when the sky clears.
     public static volatile boolean weatherTakeover = true;
@@ -271,6 +278,10 @@ public final class TreeSway {
     // phase run.
     public static volatile double coniferLeafClock = 0.0;
     public static volatile double maskClock = 0.0;
+    // The plants' per-object octave rate grows with the wind, so it
+    // integrates too: the shader's rate times treeTime turned every wind
+    // drift into a phase run that grew with the session.
+    public static volatile double plantLocalClock = 0.0;
     public static volatile double w = 0.0;
     public static volatile double wPlant = 0.0;
     public static volatile double plantGateStart = 0.8;
@@ -317,6 +328,7 @@ public final class TreeSway {
         leafClock = 0.0;
         coniferLeafClock = 0.0;
         maskClock = 0.0;
+        plantLocalClock = 0.0;
         breezeClock = Math.random() * 1.0e7;
     }
 
@@ -429,6 +441,7 @@ public final class TreeSway {
                     wp = plantGateStart + (wp - plantGateStart) * plantGateSlope;
                 }
                 wPlant = wp;
+                plantLocalClock = wrap(plantLocalClock + plantLocalRate * (1.0 + plantLocalRateStorm * wp) * dtReal);
                 double tw = (wind - 0.1) / 0.9;
                 if (tw < 0.0) tw = 0.0;
                 double dtSway = dt * (swayTempoCalm + (swayTempoStorm - swayTempoCalm) * tw);
@@ -441,6 +454,7 @@ public final class TreeSway {
                 double ringSpeed = 1.0 - stormSpeedup * wind;
                 ringClock += dtReal / (ringSpeed < 0.05 ? 0.05 : ringSpeed);
                 advect += (dir < 0.0 ? -1.0 : 1.0) * (frontSpeed + frontSpeedWind * wind) * dtReal;
+                WindSwayMod.gustSound = gustAtPlayer();
                 double sp = (frontSpeed + frontSpeedWind * wp) * (1.0 + plantFrontCalm * (1.0 - wp) + plantFrontStorm * wp);
                 speedPlant = sp;
                 advectPlant += (dir < 0.0 ? -1.0 : 1.0) * sp * dtReal;
@@ -477,6 +491,7 @@ public final class TreeSway {
             // floor on the tree pools as well, treeWindFloor is out).
             WindSwayMod.breezeTree = -1.0;
             WindSwayMod.breezePlant = -1.0;
+            WindSwayMod.gustSound = -1.0;
             TreeRenderer.disable("wind model disabled");
             WindSwayGrassDrawer.fail("wind model disabled");
             return false;
@@ -545,7 +560,7 @@ public final class TreeSway {
         u[12] = (float) turbMix1;
         u[13] = (float) turbMix2;
         u[14] = (float) turbMixLocal;
-        u[15] = 0.0f;
+        u[15] = (float) plantLocalClock;
         u[16] = (float) sensSpread;
         u[17] = (float) thresholdMax;
         u[18] = (float) responseCurve;
@@ -770,6 +785,21 @@ public final class TreeSway {
         double a = hash(i, salt);
         double b = hash(i + 1, salt);
         return a + (b - a) * f * f * (3.0 - 2.0 * f);
+    }
+
+    // The tree field's two spatial octaves at the player, the per-tree
+    // term at its mean; game thread, so the value-only noise.
+    private static double gustAtPlayer() {
+        IsoPlayer p = IsoPlayer.getInstance();
+        if (p == null) return -1.0;
+        double s = (p.getX() - p.getY()) / SQRT2;
+        double v = turbMix1 * breezeNoise((s - advect) / turbLen1, 11)
+                + turbMix2 * breezeNoise((s - advect) / turbLen2 + 7.7, 23)
+                + turbMixLocal * 0.5;
+        double u = (v - 0.5) * turbContrast + 0.5;
+        if (u <= 0.0) return 0.0;
+        if (u >= 1.0) return 1.0;
+        return u * u * (3.0 - 2.0 * u);
     }
 
     private static double breezeAt(double level, double n) {

@@ -35,10 +35,11 @@ On first launch ZombieBuddy asks whether to load Wind Sway's JAR, tick Allow.
 ## Compatibility
 
 - Safe to add or remove mid-save, the mod stores nothing in the save.
+- Apple silicon not fully tested.
 
 ## Multiplayer
 
-Not supported for now: render glitches were reported on servers that don't show in single player. If you play on a server anyway and trees or bushes look wrong, please report at [github.com/armakupub/WindSway/issues](https://github.com/armakupub/WindSway/issues) with the console.txt of that session. Since 0.4.3 it carries a status line every few minutes that tells me what the renderer was doing.
+Tested in multiplayer, locally and on a dedicated server, without errors. Other mods may still conflict with it; that shows as render glitches, or the mod falls back to vanilla until you rejoin. If that happens, please post the console.txt of that session at [github.com/armakupub/WindSway/issues](https://github.com/armakupub/WindSway/issues).
 
 ## Settings
 
@@ -53,7 +54,8 @@ Everything sits under Options → Mods → Wind Sway.
 | Minimum wind (custom) | 0–1, 0.2 | Lower edge of the custom band. Both sliders 0 = vanilla wind. |
 | Maximum wind (custom) | 0–1, 0.85 | Upper edge. At or below the minimum: a steady wind at the minimum. |
 | Weather overrides the wind setup | on | During rain, fog and storms the game's wind rules, even below the band. Off: the band stays as a floor. |
-| Wind sound | on | The wind ambience follows the mod's wind. Sound only, gameplay untouched. |
+| Wind sound | on | The wind ambience follows the mod's wind and its gusts. Sound only, gameplay untouched. |
+| Wind sound level | 0–1, 0.5 | How much of the mod's wind the ambience hears. At the default the wind bed stays near vanilla; raise it if you play Windy or Custom and want to hear the wind. Weather sounds stay as they are. |
 | Tree detail | High | Lower levels drop the fine branch and leaf motion, the crown still bends. |
 
 ## FAQ

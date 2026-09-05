@@ -140,6 +140,16 @@ windSoundOpt.onChangeApply = function(self, value)
     applyToJava("setWindSound", value)
 end
 
+local windSoundLevelOpt = modOptions:addSlider(
+    "windSoundLevel",
+    "Wind sound level",
+    0.0, 1.0, 0.05,
+    0.5,
+    "How much of the mod's wind the ambience hears. At the default the wind bed stays near vanilla; raise it if you play Windy or Custom and want to hear it. Weather sounds stay as they are.")
+windSoundLevelOpt.onChangeApply = function(self, value)
+    applyToJava("setWindSoundLevel", value)
+end
+
 -- Combo index 1..3 -> Java level 2..0. The index is what ModOptions.ini
 -- stores: never reorder, append only.
 local treeDetailLevels = { 2, 1, 0 }
@@ -162,6 +172,7 @@ local function syncToJava()
     applyBand()
     applyToJava("setWeatherTakeover", weatherTakeoverOpt:getValue())
     applyToJava("setWindSound", windSoundOpt:getValue())
+    applyToJava("setWindSoundLevel", windSoundLevelOpt:getValue())
     applyToJava("setTreeDetail", treeDetailLevels[treeDetailOpt:getValue()] or 2)
     if WindSway.javaReady and ModJava.warmUp then
         pcall(ModJava.warmUp)
@@ -177,4 +188,5 @@ WindSway.windFloorOpt = windFloorOpt
 WindSway.windCeilOpt = windCeilOpt
 WindSway.weatherTakeoverOpt = weatherTakeoverOpt
 WindSway.windSoundOpt = windSoundOpt
+WindSway.windSoundLevelOpt = windSoundLevelOpt
 WindSway.treeDetailOpt = treeDetailOpt

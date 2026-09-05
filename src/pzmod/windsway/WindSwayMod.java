@@ -2,6 +2,7 @@ package pzmod.windsway;
 
 import java.lang.reflect.Field;
 import java.util.ArrayList;
+import java.util.Locale;
 import java.util.Map;
 
 import me.zed_0xff.zombie_buddy.Accessor;
@@ -99,11 +100,22 @@ public class WindSwayMod {
         return b >= 0.0 ? b : windFloor;
     }
 
+    // The gust field at the player (TreeSway), -1 without a player or model.
+    public static volatile double gustSound = -1.0;
+
     // The wind ambience follows the raised wind (Patch_ParameterWindIntensity).
     public static volatile boolean windSound = true;
 
     public static void setWindSound(boolean v) {
         windSound = v;
+    }
+
+    // Share of the mod's wind band the ambience hears; the game's own wind
+    // and the gusts on top stay as they are.
+    public static volatile double windSoundLevel = 0.5;
+
+    public static void setWindSoundLevel(double v) {
+        windSoundLevel = Math.max(0.0, Math.min(1.0, v));
     }
 
     public static void setWeatherTakeover(boolean v) {
@@ -416,6 +428,27 @@ public class WindSwayMod {
         TreeSway.breezePeriod = Math.max(1.0, period);
         TreeSway.breezePeriodFine = Math.max(1.0, periodFine);
         TreeSway.breezeFineWeight = Math.max(0.0, Math.min(1.0, fineWeight));
+    }
+
+    public static void setWindSoundGust(double down, double up) {
+        TreeSway.soundGustDown = Math.max(0.0, Math.min(1.0, down));
+        TreeSway.soundGustUp = Math.max(0.0, up);
+    }
+
+    public static volatile boolean debugWindSound = false;
+
+    public static void setDebugWindSound(boolean v) {
+        debugWindSound = v;
+    }
+
+    private static long windSoundLogNanos;
+
+    public static void logWindSound(float raw, double floor, double gust, float sent) {
+        long now = System.nanoTime();
+        if (now - windSoundLogNanos < 2_000_000_000L) return;
+        windSoundLogNanos = now;
+        trace(String.format(Locale.ROOT, "wind sound: raw %.3f breeze %.3f gust %.2f -> fmod %.3f",
+                raw, floor, gust, sent));
     }
 
     public static void setPlantLeafOnset(double onset, double full, double clusterRatePow) {

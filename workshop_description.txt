@@ -9,7 +9,8 @@ I built this for immersion: in vanilla the vegetation stands still most of the t
 [*][b]Wind has a direction and gusts[/b]: crowns lean with the rain, gusts roll through the forest, storms bend crowns over and hold them.
 [*][b]Every plant moves by class[/b]: bushes bend as stem and crown by species, ferns bob their fronds, dead crops sway as dry stems, flower spikes nod.
 [*][b]Pick your wind[/b]: Calm, Normal, Windy or a custom band. The mod plays its own wandering wind while the game's weather is idle; rain, fog and storms take over. Vanilla = the game's wind only.
-[*][b]Wind sound[/b]: the ambience follows the mod's wind. Sound only, gameplay untouched.
+[*][b]Wind sound[/b]: the ambience follows the mod's wind and its gusts. Sound only, gameplay untouched.
+[*][b]Wind sound level[/b]: how much of that the ambience hears. Default keeps the wind bed near vanilla; raise it for Windy or Custom.
 [*][b]Tree detail[/b]: High, Medium or Low; lower levels drop the fine branch and leaf motion for weaker GPUs.
 [*][b]Render-only[/b]: water, rain and aiming stay on the real weather.
 [*][b]Own renderer[/b]: grass and trees drawn in batches instead of one draw call per sprite.
@@ -28,10 +29,11 @@ On first launch ZombieBuddy asks whether to load Wind Sway's JAR, tick Allow.
 [h1]Compatibility[/h1]
 [list]
 [*]Safe to add or remove mid-save, the mod stores nothing in the save.
+[*]Apple silicon not fully tested.
 [/list]
 
 [h1]Multiplayer[/h1]
-Not supported for now: render glitches were reported on servers that don't show in single player. If you play on a server anyway and trees or bushes look wrong, please report at [url=https://github.com/armakupub/WindSway/issues]github.com/armakupub/WindSway/issues[/url] with the console.txt of that session. Since 0.4.3 it carries a status line every few minutes that tells me what the renderer was doing.
+Tested in multiplayer, locally and on a dedicated server, without errors. Other mods may still conflict with it; that shows as render glitches, or the mod falls back to vanilla until you rejoin. If that happens, please post the console.txt of that session at [url=https://github.com/armakupub/WindSway/issues]github.com/armakupub/WindSway/issues[/url].
 
 [h1]FAQ[/h1]
 
@@ -39,7 +41,7 @@ Not supported for now: render glitches were reported on servers that don't show 
 Some, anything that moves is drawn every frame. Wind Sway batches it and stays well below vanilla's wind option; tree-heavy areas even run faster than vanilla on my machine.
 
 [b]The constant movement or the wind sound is getting on my nerves?[/b]
-Set Wind to Calm or Vanilla in Options → Mods → Wind Sway, or untick "Wind sound". The default is Normal.
+Set Wind to Calm or Vanilla in Options → Mods → Wind Sway, lower "Wind sound level", or untick "Wind sound". The default is Normal.
 
 [b]Why ZombieBuddy, can't this work without it?[/b]
 No. The wind effects and the renderer are Java, Lua can't reach them.

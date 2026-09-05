@@ -8,7 +8,7 @@ final class TreeClass {
 
     // Holly: dense stiff evergreen cone, tiny leathery leaves.
     static final int CONE = 0;
-    // Hemlock: hanging branch tips, the tiers bob.
+    // Hemlock: hanging branch tips; the crown leans as one, no tier bob.
     static final int PENDULOUS = 1;
     // Pine: long bare trunk, open stiff layers, needle tufts.
     static final int PINE = 2;
@@ -29,7 +29,7 @@ final class TreeClass {
     static final double[] period = {1.0, 1.0, 1.1, 1.0, 1.0, 1.0};
     static final double[] periodExp = {0.35, 0.35, 0.35, 0.35, 0.35, 0.35};
     static final double[] ring = {0.9, 1.0, 1.0, 1.0, 1.0, 0.9};
-    static final double[] lobe = {0.8, 1.3, 0.6, 1.2, 1.0, 0.5};
+    static final double[] lobe = {0.8, 0.0, 0.6, 1.2, 1.0, 0.5};
     static final double[] lobeCell = {1.0, 1.0, 1.6, 0.7, 1.2, 1.3};
     static final double[] lobeY = {0.8, 1.2, 0.8, 1.0, 1.0, 0.8};
     static final double[] leafAmp = {1.0, 1.0, 1.0, 1.0, 1.0, 1.0};

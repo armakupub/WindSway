@@ -39,7 +39,7 @@ uniform mat4 ModelViewProjection;
 uniform vec4 uWind;    // x: w (plants channel), y: amplitude at w, z: lean direction sign, w: unused
 uniform vec4 uClock;   // x: real seconds, y: swing clock (s, mod 2048), z: unused, w: standing lean per unit of w
 uniform vec4 uTurb;    // x, y: steady ramp (w lo, hi), z: per-object rate (1/s), w: contrast
-uniform vec4 uMix;     // x, y, z: slow, short, per-object mix weights
+uniform vec4 uMix;     // x, y, z: slow, short, per-object mix weights, w: per-object clock (cycles at rate spread 1)
 uniform vec4 uResp;    // x: sensitivity spread, y: dead band max, z: response curve calm, w: curve at w 1
 uniform vec4 uRing;    // x: swing gain, y: unit change rate (1/s), z: knee, w: wind excitation
 uniform vec4 uRing2;   // x: rest share, y: fast share at w 1, z: upwind cap, w: unused
@@ -95,7 +95,7 @@ vec2 noise1(float x, float salt)
 // The advection carries the lag: the fronts were that much further back.
 // z: dg/dt of the slow part alone (front energy for the ring gate), w: g of
 // the slow part alone (the lean follows it; the fine octaves only ring).
-vec4 windAt(float s, float sc, float rate, float off, float dirSign, float speed, float lag, float hon, float hlen)
+vec4 windAt(float s, float sc, float rate, float off, float lclk, float dirSign, float speed, float lag, float hon, float hlen)
 {
 	float adv = uLean.z - dirSign * speed * lag;
 	float t = uClock.x - lag;
@@ -103,8 +103,10 @@ vec4 windAt(float s, float sc, float rate, float off, float dirSign, float speed
 	vec2 n2 = noise1((s - adv) / uPTurb.y + 7.7, 23.0);
 	// Decorrelate through the salt, not the coordinate: a 4096 offset
 	// costs twelve mantissa bits in float32 (the tree path does this in
-	// double). noise1 hashes floor(x) + salt, so this is exact.
-	vec2 n3 = noise1(t * rate + fract(off), 37.0 + floor(off));
+	// double). noise1 hashes floor(x) + salt, so this is exact. The clock
+	// is integrated over the wind-dependent rate (TreeSway.plantLocalClock):
+	// rate times the absolute time turned every wind drift into a phase run.
+	vec2 n3 = noise1(lclk - lag * rate, 37.0 + floor(off));
 	float v = uMix.x * n1.x + uMix.y * n2.x + uMix.z * n3.x;
 	float d = -uMix.x * n1.y * dirSign * speed / uPTurb.x
 	        - uMix.y * n2.y * dirSign * speed / uPTurb.y
@@ -235,6 +237,7 @@ void main (void)
 		float rate = uTurb.z * (1.0 + uCross.w * w) * (0.7 + 0.6 * hRate);
 		float sc = aClass3.z;
 		float off = hPhase * 4096.0;
+		float lclk = uMix.w * (0.7 + 0.6 * hRate) + fract(off);
 		bool ring = uModel.x > 0.5;
 		float hon = ring ? uHon.z : 0.0;
 		float period = aWind.w * (1.0 - uHon.w + 2.0 * uHon.w * hPeriod);
@@ -244,7 +247,7 @@ void main (void)
 		// a longer, slower wave, which also keeps it under the ring's T/8
 		// sampling rate.
 		float hlen = uHon.x * max(1.0, period / uHon2.x);
-		vec4 gg = windAt(s, sc, rate, off, dirSign, speed, 0.0, hon, hlen);
+		vec4 gg = windAt(s, sc, rate, off, lclk, dirSign, speed, 0.0, hon, hlen);
 		// The lean, the leaf gust and the flutter gate follow the slow wind;
 		// the fine octaves reach only the ring.
 		float g = ring ? gg.w : gg.x;
@@ -259,8 +262,8 @@ void main (void)
 		float gd2 = gd * gd;
 		if (uLean.x > 0.0)
 		{
-			vec4 gl = windAt(s, sc, rate, off, dirSign, speed, uLean.x, hon, hlen);
-			vec4 gh = windAt(s, sc, rate, off, dirSign, speed, 0.5 * uLean.x, hon, hlen);
+			vec4 gl = windAt(s, sc, rate, off, lclk, dirSign, speed, uLean.x, hon, hlen);
+			vec4 gh = windAt(s, sc, rate, off, lclk, dirSign, speed, 0.5 * uLean.x, hon, hlen);
 			// A woody body follows the lagged wind more (class inertia factor).
 			gL = mix(g, ring ? gl.w : gl.x, min(1.0, uLean.y * aClass4.z));
 			gd2 = (gd2 + gh.y * gh.y + gl.y * gl.y) / 3.0;
@@ -295,7 +298,7 @@ void main (void)
 			for (int k = 1; k <= 13; ++k)
 			{
 				float fk = float(k);
-				vec4 wk = windAt(s, sc, rate, off, dirSign, speed, fk * dl, hon, hlen);
+				vec4 wk = windAt(s, sc, rate, off, lclk, dirSign, speed, fk * dl, hon, hlen);
 				float gdk = wk.y;
 				front += wk.z * wk.z;
 				if (k <= 12)

@@ -1,6 +1,12 @@
 Wind Sway - Changelog
 =====================
 
+0.5.0 - 2026-09-05
+  - The wind ambience rides the gusts: a front that sweeps the screen is heard, and the lull after it.
+  - New option "Wind sound level", default 0.5: how much of the mod's wind the ambience hears. At the default the wind bed stays near vanilla and the wildlife stays audible; raise it if you play Windy or Custom. Weather sounds stay as they are.
+  - Fixed: after about an hour in one world the grass could shiver at two to three times its pace; a reload cured it.
+  - Thanks to Vargr for the report.
+
 0.4.4 - 2026-09-04
   - Fixed: with Vanilla Vehicles Animated and its transparent windows add-on, vehicle windows turned red or flickered red while Environment Reflections is off. The batch left its depth pages on texture units the vehicle shader reads for reflections; they are unbound now.
   - Internal: an empty tree list restores the tracked GL state like vanilla; the status line is also written when leaving a game.
