@@ -46,17 +46,20 @@ if MainOptions then
     end
 end
 
-local modOptions = PZAPI.ModOptions:create("WindSway", "Wind Sway")
+-- Texts are translation keys (Translate/<LANG>/UI.json): the options
+-- screen runs getText on names and tooltips itself, ModOptions on combo
+-- items and descriptions.
+local modOptions = PZAPI.ModOptions:create("WindSway", "UI_WindSway_ModName")
 
 if not WindSway.javaReady then
-    modOptions:addDescription("Wind Sway's Java part did not load (ZombieBuddy prompt declined?). Options below have no effect.")
+    modOptions:addDescription("UI_WindSway_JavaMissingDescription")
 end
 
 local enableOpt = modOptions:addTickBox(
     "enable",
-    "Enable Wind Sway",
+    "UI_WindSway_EnableLabel",
     true,
-    "Master switch: turns on the game's wind path and draws swaying vegetation with the mod's batched renderer. Off = back to your vanilla settings.")
+    "UI_WindSway_EnableTooltip")
 enableOpt.onChangeApply = function(self, value)
     applyToJava("setEnabled", value)
 end
@@ -84,13 +87,13 @@ end
 
 windPresetOpt = modOptions:addComboBox(
     "windPreset",
-    "Wind",
-    "The mod's own wind while the game's weather is idle. Vanilla = the game's wind only. Custom uses the two sliders below.")
-windPresetOpt:addItem("Vanilla")
-windPresetOpt:addItem("Calm")
-windPresetOpt:addItem("Normal", true)
-windPresetOpt:addItem("Windy")
-windPresetOpt:addItem("Custom")
+    "UI_WindSway_WindPresetLabel",
+    "UI_WindSway_WindPresetTooltip")
+windPresetOpt:addItem("UI_WindSway_WindPresetVanilla")
+windPresetOpt:addItem("UI_WindSway_WindPresetCalm")
+windPresetOpt:addItem("UI_WindSway_WindPresetNormal", true)
+windPresetOpt:addItem("UI_WindSway_WindPresetWindy")
+windPresetOpt:addItem("UI_WindSway_WindPresetCustom")
 -- Apply fires before the screen stores the new value; getValue() in the
 -- callback still reads the old one.
 windPresetOpt.onChangeApply = function(self, selected)
@@ -102,10 +105,10 @@ end
 -- the scale hint lives in the description.
 windFloorOpt = modOptions:addSlider(
     "baseline",
-    "Minimum wind (custom)",
+    "UI_WindSway_WindFloorLabel",
     0.0, 1.0, 0.05,
     0.2,
-    "Only with Custom. Both sliders 0 = vanilla wind.")
+    "UI_WindSway_WindFloorTooltip")
 windFloorOpt.onChangeApply = function(self, value)
     self:setValue(value)
     applyBand()
@@ -113,10 +116,10 @@ end
 
 windCeilOpt = modOptions:addSlider(
     "baselineMax",
-    "Maximum wind (custom)",
+    "UI_WindSway_WindCeilLabel",
     0.0, 1.0, 0.05,
     0.85,
-    "Only with Custom. At or below the minimum: a steady wind at the minimum.")
+    "UI_WindSway_WindCeilTooltip")
 windCeilOpt.onChangeApply = function(self, value)
     self:setValue(value)
     applyBand()
@@ -124,28 +127,28 @@ end
 
 local weatherTakeoverOpt = modOptions:addTickBox(
     "weatherTakeover",
-    "Weather overrides the wind setup",
+    "UI_WindSway_WeatherTakeoverLabel",
     true,
-    "During rain, fog and storms the game's wind rules, even below your wind band. Off: the band stays as a floor, weather only shows above it. No effect on Vanilla.")
+    "UI_WindSway_WeatherTakeoverTooltip")
 weatherTakeoverOpt.onChangeApply = function(self, value)
     applyToJava("setWeatherTakeover", value)
 end
 
 local windSoundOpt = modOptions:addTickBox(
     "windSound",
-    "Wind sound",
+    "UI_WindSway_WindSoundLabel",
     true,
-    "The wind ambience follows the mod's wind. Sound only, gameplay untouched.")
+    "UI_WindSway_WindSoundTooltip")
 windSoundOpt.onChangeApply = function(self, value)
     applyToJava("setWindSound", value)
 end
 
 local windSoundLevelOpt = modOptions:addSlider(
     "windSoundLevel",
-    "Wind sound level",
+    "UI_WindSway_WindSoundLevelLabel",
     0.0, 1.0, 0.05,
     0.5,
-    "How much of the mod's wind the ambience hears. At the default the wind bed stays near vanilla; raise it if you play Windy or Custom and want to hear it. Weather sounds stay as they are.")
+    "UI_WindSway_WindSoundLevelTooltip")
 windSoundLevelOpt.onChangeApply = function(self, value)
     applyToJava("setWindSoundLevel", value)
 end
@@ -155,11 +158,11 @@ end
 local treeDetailLevels = { 2, 1, 0 }
 local treeDetailOpt = modOptions:addComboBox(
     "treeDetail",
-    "Tree detail",
-    "Lower levels drop the fine branch and leaf motion, the crown still bends.")
-treeDetailOpt:addItem("High", true)
-treeDetailOpt:addItem("Medium")
-treeDetailOpt:addItem("Low")
+    "UI_WindSway_TreeDetailLabel",
+    "UI_WindSway_TreeDetailTooltip")
+treeDetailOpt:addItem("UI_WindSway_TreeDetailHigh", true)
+treeDetailOpt:addItem("UI_WindSway_TreeDetailMedium")
+treeDetailOpt:addItem("UI_WindSway_TreeDetailLow")
 treeDetailOpt.onChangeApply = function(self, selected)
     applyToJava("setTreeDetail", treeDetailLevels[selected] or 2)
 end

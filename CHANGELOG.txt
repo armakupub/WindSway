@@ -1,6 +1,11 @@
 Wind Sway - Changelog
 =====================
 
+0.5.1 - 2026-09-07
+  - The options come in eleven more languages: Chinese, German, Spanish, French, Italian, Japanese, Korean, Polish, Brazilian Portuguese, Russian and Turkish. Base translations, corrections are welcome.
+  - Internal: the option texts moved to translation keys with an English base file.
+  - Thanks to GG Bond for the nudge.
+
 0.5.0 - 2026-09-05
   - The wind ambience rides the gusts: a front that sweeps the screen is heard, and the lull after it.
   - New option "Wind sound level", default 0.5: how much of the mod's wind the ambience hears. At the default the wind bed stays near vanilla and the wildlife stays audible; raise it if you play Windy or Custom. Weather sounds stay as they are.
