@@ -1,6 +1,12 @@
 Wind Sway - Changelog
 =====================
 
+0.5.2 - 2026-09-15
+  - Fixed: the mod's wind could set off the game's storm ambience under a clear sky, above all the window rattle indoors, which sounds like a zombie at the frame.
+  - The window and door ambience now stays quiet while the mod is the one making the wind, and comes back as soon as real weather takes over.
+  - The gusts ride the mod's own wind only. When the weather blows harder than your band, it is left exactly as it is.
+  - Thanks to Skrap for the report.
+
 0.5.1 - 2026-09-07
   - The options come in eleven more languages: Chinese, German, Spanish, French, Italian, Japanese, Korean, Polish, Brazilian Portuguese, Russian and Turkish. Base translations, corrections are welcome.
   - Internal: the option texts moved to translation keys with an English base file.

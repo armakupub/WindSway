@@ -118,6 +118,13 @@ public class WindSwayMod {
         windSoundLevel = Math.max(0.0, Math.min(1.0, v));
     }
 
+    // Ceiling for the wind the ambience hears; 1.0 is FMOD's own maximum.
+    public static volatile double windSoundCap = 1.0;
+
+    public static void setWindSoundCap(double v) {
+        windSoundCap = Math.max(0.0, Math.min(1.0, v));
+    }
+
     public static void setWeatherTakeover(boolean v) {
         TreeSway.weatherTakeover = v;
     }
@@ -447,8 +454,8 @@ public class WindSwayMod {
         long now = System.nanoTime();
         if (now - windSoundLogNanos < 2_000_000_000L) return;
         windSoundLogNanos = now;
-        trace(String.format(Locale.ROOT, "wind sound: raw %.3f breeze %.3f gust %.2f -> fmod %.3f",
-                raw, floor, gust, sent));
+        trace(String.format(Locale.ROOT, "wind sound: raw %.3f breeze %.3f gust %.2f -> fmod %.3f, windows %s",
+                raw, floor, gust, sent, WindowBus.statusLine()));
     }
 
     public static void setPlantLeafOnset(double onset, double full, double clusterRatePow) {
@@ -1010,6 +1017,7 @@ public class WindSwayMod {
         DepthAtlas.rearm();
         rustleOk = true;
         treeOreScaleOk = true;
+        WindowBus.rearm();
         BatchSequencer.rearm();
         GrassCapture.rearm();
         PlantClass.clearCache();
@@ -1118,6 +1126,7 @@ public class WindSwayMod {
                 + " | trees " + TreeRenderer.statusLine()
                 + " | grass " + WindSwayGrassDrawer.statusLine()
                 + " | atlas " + DepthAtlas.statusLine()
+                + " | windows " + WindowBus.statusLine()
                 + " | glErrors=" + glErrors);
     }
 
@@ -1126,6 +1135,7 @@ public class WindSwayMod {
         if (enabled && heartbeatMs != 0L) status();
         enabled = false;
         heartbeatMs = 0L;
+        WindowBus.release();
     }
 
     public static void setFlushPrecise(boolean v) {
