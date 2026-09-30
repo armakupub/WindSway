@@ -202,11 +202,28 @@ public final class TreeRenderer {
     public static volatile double bareCell = 0.6;
     // Lobe share kept by the bare wood part under a foliage overlay.
     public static volatile double woodLobe = 0.25;
+    // Axe shudder at its start: leaf px and lobe px (x sprite width / 128),
+    // fading with vanilla's shudder time.
+    public static volatile double shudderLeaf = 1.5;
+    public static volatile double shudderBranch = 0.6;
+    private static boolean shakeLogged = false;
+    // Cut jumbo layers in the one billboard plane (trunk, trunk overlay,
+    // treetop, treetop overlay) z-fight where they overlap; stacked apart
+    // within one depth-stagger step like the single sprite.
+    static final float JUMBO_LAYER_STEP = 0.5e-4f;
     // Leaf-material mask on flutter and flicker (LeafMaskAtlas): 1 = painted
     // wood in the crown band holds still, 0 = off.
     public static volatile double woodMask = 1.0;
+    // Clump maps (ClumpAtlas) on the mass-painted crowns: the lobes and a nod
+    // move each painted clump as one piece. Nod amplitude on the leaf
+    // amplitude, its vertical share, nod cell on the clump diameter.
+    public static volatile boolean clumps = true;
+    public static volatile double clumpNod = 1.5;
+    public static volatile double clumpNodY = 0.35;
+    public static volatile double clumpCell = 1.0;
     // Diagnosis view, 0 = off; 7 = depth-punch view (every drawn fragment
-    // adds 20% red, a quad culled behind an apron shows as a bake hole).
+    // adds 20% red, a quad culled behind an apron shows as a bake hole);
+    // 8 = clump view (clump borders and thick wood magenta).
     public static volatile double debugMode = 0.0;
     // The bare factors blend in with (1 - foliage); a sparse autumn or
     // spring overlay sits between the leafy and the bare tree. Bare crowns
@@ -296,7 +313,8 @@ public final class TreeRenderer {
 
     static String statusLine() {
         return "ok=" + ok + " warp=" + warp + " program=" + programId + " lists=" + totalLists
-                + " pageMiss=" + totalPageMiss + " leafMask=" + LeafMaskAtlas.active();
+                + " pageMiss=" + totalPageMiss + " leafMask=" + LeafMaskAtlas.active()
+                + " clumps=" + ClumpAtlas.active();
     }
 
     // A recompile keeps the Shader object and may reuse the GL name: the
@@ -346,6 +364,7 @@ public final class TreeRenderer {
         static final MethodHandle ore;
         static final MethodHandle oreX1;
         static final MethodHandle oreX2;
+        static final MethodHandle oreY3;
         static final MethodHandle useStencil;
         static final MethodHandle fadeAlpha;
         static final MethodHandle transparent;
@@ -373,6 +392,7 @@ public final class TreeRenderer {
                 ore = getter(lookup, treeClass, "objectRenderEffects", boolean.class);
                 oreX1 = getter(lookup, treeClass, "oreX1", float.class);
                 oreX2 = getter(lookup, treeClass, "oreX2", float.class);
+                oreY3 = getter(lookup, treeClass, "oreY3", float.class);
                 useStencil = getter(lookup, treeClass, "useStencil", boolean.class);
                 fadeAlpha = getter(lookup, treeClass, "fadeAlpha", float.class);
                 transparent = getter(lookup, treeClass, "transparent", boolean.class);
@@ -433,15 +453,16 @@ public final class TreeRenderer {
         l[at + 1] = n[at + 1];
     }
 
-    // Attribute layout, 10 x vec4 (location == slot):
+    // Attribute layout, 11 x vec4 (location == slot):
     // 0 world position xyz + depth, 1 colour, 2 uv + height fraction +
     // branch cell px, 3 field pixel coords + packed clock cycles + branch
     // clock fraction, 4 atlas rect, 5 bend (lean u, bend start, exponent,
     // branch amp u), 6 leaf (amp u, amp v, band top v, band bottom v),
     // 7 fade alpha, bend end, branch amp v, leaf clock fraction,
     // 8 packed cells (leaf + 64 * flicker + 4096 * cluster, half px), snap,
-    // local wind, flicker amplitude, 9 leaf-mask cell (u0, v0, u1, v1).
-    private static final int NUM_ATTRIBS = 10;
+    // local wind, flicker amplitude, 9 leaf-mask cell (u0, v0, u1, v1),
+    // 10 clump-map region (u0, v0, u1, v1).
+    private static final int NUM_ATTRIBS = 11;
     private static final int STRIDE = NUM_ATTRIBS * 16;
     // Grows when one list outsizes it: a throw here would park the
     // renderer on the vanilla path for the rest of the session.
@@ -719,6 +740,7 @@ public final class TreeRenderer {
         program.addCompileListener(ON_COMPILE);
         lookupUniforms();
         LeafMaskAtlas.ensure();
+        ClumpAtlas.ensure();
         if (!glInfoLogged) {
             glInfoLogged = true;
             glInfo = "GL: " + GL11.glGetString(GL11.GL_RENDERER)
@@ -773,6 +795,7 @@ public final class TreeRenderer {
         shader.Start();
         program.setSamplerUnit("DIFFUSE", 0);
         program.setSamplerUnit("MASK", 1);
+        program.setSamplerUnit("CLUMP", 2);
         shader.End();
     }
 
@@ -806,6 +829,7 @@ public final class TreeRenderer {
             clearRequested = false;
             TreeProfile.clearCache();
             LeafMaskAtlas.clearCache();
+            ClumpAtlas.clearCache();
         }
         if (rearmRequested) {
             rearmRequested = false;
@@ -926,8 +950,14 @@ public final class TreeRenderer {
             float cutawayAlpha = (float) H.cutawayAlpha.invokeExact(tree);
             int depthOffset = (int) H.depthOffset.invokeExact(tree);
             float lean = 0.0f;
+            float shake = 0.0f;
             if ((boolean) H.ore.invokeExact(tree)) {
                 lean = 0.5f * ((float) H.oreX1.invokeExact(tree) + (float) H.oreX2.invokeExact(tree));
+                shake = WindSwayMod.decodeShake((float) H.oreY3.invokeExact(tree));
+                if (shake > 0.0f && !shakeLogged) {
+                    shakeLogged = true;
+                    WindSwayMod.trace("first axe shake drawn, " + shake);
+                }
             }
             boolean video = WindSwayMod.videoMode;
             int group = video ? GROUP_OPAQUE
@@ -969,9 +999,34 @@ public final class TreeRenderer {
             // Seasonal trees are a bare base sprite plus a foliage overlay
             // (texture2); both take base, crown line and top from the pair
             // so branch tips and leaves bend as one.
-            TreeProfile refProfile = TreeProfile.of(texture != null ? texture : texture2);
-            TreeProfile p1 = texture != null ? refProfile : null;
-            TreeProfile p2 = texture2 != null ? (texture != null ? TreeProfile.of(texture2) : refProfile) : null;
+            // A cut jumbo arrives as trunk, then treetop at the same spot; the
+            // trunk takes the profiles its treetop maps to.
+            Texture topTex = texture;
+            Texture topTex2 = texture2;
+            if (texture != null && i + 1 < trees.size() && TreeProfile.isJumboTrunk(texture)) {
+                Object next = trees.get(i + 1);
+                if ((float) H.x.invokeExact(next) == tx && (float) H.y.invokeExact(next) == ty
+                        && (float) H.z.invokeExact(next) == tz) {
+                    topTex = (Texture) H.texture.invokeExact(next);
+                    topTex2 = (Texture) H.texture2.invokeExact(next);
+                }
+            }
+            TreeProfile whole = topTex != null ? TreeProfile.wholeOf(topTex) : null;
+            boolean cutTop = whole != null && topTex == texture;
+            boolean cutTrunk = whole != null && topTex != texture;
+            TreeProfile refProfile;
+            TreeProfile p1;
+            TreeProfile p2;
+            if (whole != null) {
+                TreeProfile whole2 = topTex2 != null ? TreeProfile.wholeOf(topTex2) : null;
+                refProfile = whole;
+                p1 = texture != null ? whole : null;
+                p2 = texture2 != null ? (whole2 != null ? whole2 : TreeProfile.of(texture2)) : null;
+            } else {
+                refProfile = TreeProfile.of(texture != null ? texture : texture2);
+                p1 = texture != null ? refProfile : null;
+                p2 = texture2 != null ? (texture != null ? TreeProfile.of(texture2) : refProfile) : null;
+            }
             float baseRow = refProfile.baseRow;
             float topRow = refProfile.topRow;
             if (p2 != null && p2.topRow < topRow) topRow = p2.topRow;
@@ -1041,13 +1096,16 @@ public final class TreeRenderer {
                 // texels on a regular sprite, times the jumbo width factor.
                 float leanPx = (float) (sway * sizeF + lean) * 128.0f
                         * (float) Math.pow(contentH / hOrig, heightPow) * giant * jitter;
-                float leafPx = profile.leafy ? (float) ((leafAmp + (leafAmpStorm - leafAmp) * n) * leafGate
-                        * (leafBase + (1.0 - leafBase) * gLocal)
+                // An axe hit shakes leaves and lobes, not the lean, ungated so
+                // it shows in calm air.
+                float leafPx = profile.leafy ? (float) (((leafAmp + (leafAmpStorm - leafAmp) * n) * leafGate
+                        * (leafBase + (1.0 - leafBase) * gLocal) + shudderLeaf * shake)
                         * Math.min(1.0, Math.pow(contentH / leafRefH, leafSizePow))) : 0.0f;
-                float branchPx = (float) Math.min(branchMax * sizeF,
+                float branchPx = (float) (Math.min(branchMax * sizeF,
                         (branchFloor + (branchStorm - branchFloor) * n) * sizeF * branchGate
                         * (branchGustBase + (1.0 - branchGustBase) * lobeEnergy)
-                        + branchFrac * Math.abs(leanPx));
+                        + branchFrac * Math.abs(leanPx))
+                        + shudderBranch * shake * sizeF);
                 float leafRate = (float) (1.0 - leafRateSpread + 2.0 * leafRateSpread * h5);
                 if (refProfile.conifer) {
                     leafPx *= (float) (coniferLeafAmp + (coniferLeafAmpStorm - coniferLeafAmp) * n);
@@ -1096,6 +1154,16 @@ public final class TreeRenderer {
                     clusterCell = Math.max(cellPx, clusterPx * cellGrow * (1.0 - t));
                 }
                 if (clusterAmpPow != 0.0) leafPx *= (float) Math.pow(clusterCell / cellPx, clusterAmpPow);
+                // A mapped crown nods clump by clump on a lattice of the clump
+                // size, the leaf layer's amplitude and clock.
+                float[] cRect = clumps && profile.leafy && !refProfile.conifer ? ClumpAtlas.rectFor(tex) : null;
+                float leafYShare = 0.3f;
+                if (cRect != null) {
+                    clusterCell = Math.min(31.0, Math.max(1.0, clumpCell * cRect[4]));
+                    snap = 0.0f;
+                    leafPx *= (float) clumpNod;
+                    leafYShare = (float) clumpNodY;
+                }
                 float flickPx = 0.0f;
                 float flickCell = 0.0f;
                 if (profile.leafy && !refProfile.conifer) {
@@ -1140,7 +1208,7 @@ public final class TreeRenderer {
                 float padL = reach + Math.max(0.0f, -leanTop);
                 float padR = reach + Math.max(0.0f, leanTop);
                 // Vertical offsets and the tilt can lift the crown past the quad top.
-                float padY = (float) (0.3 * leafPx + lobeYShare * branchPx
+                float padY = (float) (leafYShare * leafPx + lobeYShare * branchPx
                         + 0.5 * crownTilt * Math.abs(leanPx) * topFactor) + 1.0f;
 
                 float xStart = tex.getXStart();
@@ -1167,6 +1235,16 @@ public final class TreeRenderer {
                     wu1 = wRect[2];
                     wv1 = wRect[3];
                 }
+                float cu0 = -1.0f;
+                float cv0 = 0.0f;
+                float cu1 = 0.0f;
+                float cv1 = 0.0f;
+                if (cRect != null) {
+                    cu0 = cRect[0];
+                    cv0 = cRect[1];
+                    cu1 = cRect[2];
+                    cv1 = cRect[3];
+                }
                 // Leaf band top..trunk stub; no leaves = empty band, the fragment skips
                 // flutter, mask and shade.
                 float vLeafTop = 2.0f;
@@ -1179,7 +1257,7 @@ public final class TreeRenderer {
                 float branchU = (float) (branchPx * lobeXShare) * texelU;
                 float branchV = (float) (branchPx * lobeYShare) * texelV;
                 float leafU = leafPx * texelU;
-                float leafV = 0.3f * leafPx * texelV;
+                float leafV = leafYShare * leafPx * texelV;
                 // Lattice origin on the sprite, not the part: base and
                 // overlay are trimmed differently and must share the phase.
                 float pixL = offX - padL + seedX;
@@ -1204,6 +1282,10 @@ public final class TreeRenderer {
                         depthT -= 1.0E-4f;
                         depthB -= 1.0E-4f;
                     }
+                    float layer = cutTop ? -(part == 1 ? 1.0f : 2.0f) * JUMBO_LAYER_STEP
+                            : cutTrunk && part == 1 ? JUMBO_LAYER_STEP : 0.0f;
+                    depthT += layer;
+                    depthB += layer;
                     if (top > offY) {
                         depthT -= floorHack(top - y2, dyFloor);
                         depthB -= floorHack(bottom - y2, dyFloor);
@@ -1225,7 +1307,7 @@ public final class TreeRenderer {
                     putVertex(o, 0, xL, yT, wX, wY, wZ, depthT, r, g, b, a, uL, vQuad0, hTop, branchCell,
                             pixL, pixT, packedNm, qBranch, xStart, xEnd, yStartTex, yEndTex,
                             leanU, hc, powTree, branchU, leafU, leafV, vLeafTop, vLeafBottom, fadeAlpha, hKnee, branchV, qLeaf,
-                            packedCells, snap, (float) gLocal, flickPx, wu0, wv0, wu1, wv1);
+                            packedCells, snap, Math.max((float) gLocal, shake), flickPx, wu0, wv0, wu1, wv1, cu0, cv0, cu1, cv1);
                     System.arraycopy(o, 0, o, FLOATS, FLOATS);
                     System.arraycopy(o, 0, o, 2 * FLOATS, FLOATS);
                     System.arraycopy(o, 0, o, 3 * FLOATS, FLOATS);
@@ -1262,7 +1344,8 @@ public final class TreeRenderer {
                                   float leafU, float leafV, float bandTop, float bandBottom, float fade,
                                   float knee, float branchV, float qLeaf,
                                   float packedCells, float snap, float localWind, float flickPx,
-                                  float mu0, float mv0, float mu1, float mv1) {
+                                  float mu0, float mv0, float mu1, float mv1,
+                                  float cu0, float cv0, float cu1, float cv1) {
         float y = ly * ISO_Y;
         o[i] = b00 * lx + b10 * y + b30 + wX;
         o[i + 1] = b01 * lx + b11 * y + b31 + wY;
@@ -1304,6 +1387,10 @@ public final class TreeRenderer {
         o[i + 37] = mv0;
         o[i + 38] = mu1;
         o[i + 39] = mv1;
+        o[i + 40] = cu0;
+        o[i + 41] = cv0;
+        o[i + 42] = cu1;
+        o[i + 43] = cv1;
     }
 
     // The other three corners are a copy of vertex 0 with position, depth,
@@ -1489,6 +1576,11 @@ public final class TreeRenderer {
                 GL11.glBindTexture(GL11.GL_TEXTURE_2D, LeafMaskAtlas.textureId);
                 GL13.glActiveTexture(GL13.GL_TEXTURE0);
             }
+            if (ClumpAtlas.active()) {
+                GL13.glActiveTexture(GL13.GL_TEXTURE2);
+                GL11.glBindTexture(GL11.GL_TEXTURE_2D, ClumpAtlas.textureId);
+                GL13.glActiveTexture(GL13.GL_TEXTURE0);
+            }
             u[56] = (float) debugMode;
             u[57] = 0.0f;
             u[58] = 0.0f;
@@ -1571,6 +1663,8 @@ public final class TreeRenderer {
             releaseRuns();
             try {
                 GL13.glActiveTexture(GL13.GL_TEXTURE1);
+                GL11.glBindTexture(GL11.GL_TEXTURE_2D, 0);
+                GL13.glActiveTexture(GL13.GL_TEXTURE2);
                 GL11.glBindTexture(GL11.GL_TEXTURE_2D, 0);
                 GL13.glActiveTexture(GL13.GL_TEXTURE0);
             } catch (Throwable ignored) {

@@ -662,6 +662,13 @@ public class WindSwayMod {
         TreeRenderer.woodMask = v < 0.0 ? 0.0 : v > 1.0 ? 1.0 : v;
     }
 
+    public static void setTreeClumps(boolean on, double nod, double nodY, double cell) {
+        TreeRenderer.clumps = on;
+        TreeRenderer.clumpNod = nod;
+        TreeRenderer.clumpNodY = nodY;
+        TreeRenderer.clumpCell = cell;
+    }
+
     public static void setTreeDebug(double mode) {
         TreeRenderer.debugMode = mode;
     }
@@ -930,6 +937,125 @@ public class WindSwayMod {
         return p instanceof IsoObject ? ((IsoObject) p).getWindRenderEffects() : null;
     }
 
+    // The shake rides in the bottom corners' y at this scale: should vanilla
+    // draw the list after all, it moves them by a quarter texel at most.
+    static final double SHAKE_CODE = 1.0e-3;
+
+    static float decodeShake(float y3) {
+        if (!(y3 > 0.0f)) return 0.0f;
+        return (float) Math.min(1.0, y3 / SHAKE_CODE);
+    }
+
+    private static Field oreTotalTimeField;
+    private static Field oreTotalMaxTimeField;
+    private static Field oreKindField;
+    private static boolean shudderLogged = false;
+
+    // Remaining axe shudder 0..1 (1 = just hit), -1 for other effects.
+    private static double shudderEnvelope(ObjectRenderEffects ore) throws Exception {
+        if (oreKindField == null) {
+            Field type = Accessor.findField(ObjectRenderEffects.class, "type");
+            Field time = Accessor.findField(ObjectRenderEffects.class, "totalTime");
+            Field max = Accessor.findField(ObjectRenderEffects.class, "totalMaxTime");
+            if (type == null || time == null || max == null) {
+                throw new NoSuchFieldException("type/totalTime/totalMaxTime");
+            }
+            type.setAccessible(true);
+            time.setAccessible(true);
+            max.setAccessible(true);
+            oreTotalTimeField = time;
+            oreTotalMaxTimeField = max;
+            oreKindField = type;
+        }
+        if (oreKindField.get(ore) != RenderEffectType.Hit_Tree_Shudder) return -1.0;
+        float max = oreTotalMaxTimeField.getFloat(ore);
+        if (max <= 0.0f) return 0.0;
+        double u = 1.0 - oreTotalTimeField.getFloat(ore) / max;
+        if (u <= 0.0) return 0.0;
+        return u * u;
+    }
+
+    public static void setTreeShudder(double leafPx, double branchPx) {
+        TreeRenderer.shudderLeaf = leafPx;
+        TreeRenderer.shudderBranch = branchPx;
+    }
+
+    public static volatile double chopShakePx = 4.0;
+
+    public static void setTreeChopShake(double px) {
+        chopShakePx = px;
+    }
+
+    private static boolean chopOk = true;
+    private static Field chopTreeField;
+    private static Field objectEffectsField;
+    private static ObjectRenderEffects chopScratch;
+    private static IsoTree chopTree;
+    private static ObjectRenderEffects chopSaved;
+
+    // Game thread, around vanilla's highlight draw; must not throw.
+    public static void beginChopHighlight() {
+        if (!enabled || !chopOk || !TreeRenderer.active()) return;
+        try {
+            if (objectEffectsField == null) {
+                Field t = Accessor.findField(IsoTree.class, "chopTreeHighlighted");
+                Field o = Accessor.findField(IsoObject.class, "objectRenderEffects");
+                if (t == null || o == null) throw new NoSuchFieldException("chopTreeHighlighted/objectRenderEffects");
+                t.setAccessible(true);
+                o.setAccessible(true);
+                chopTreeField = t;
+                objectEffectsField = o;
+            }
+            Object t = chopTreeField.get(null);
+            if (!(t instanceof IsoTree)) return;
+            IsoTree tree = (IsoTree) t;
+            ObjectRenderEffects ore = (ObjectRenderEffects) objectEffectsField.get(tree);
+            ObjectRenderEffects s = chopScratch;
+            if (s == null) {
+                s = ObjectRenderEffects.alloc();
+                chopScratch = s;
+            }
+            s.x1 = 0.0;
+            s.y1 = 0.0;
+            s.x2 = 0.0;
+            s.y2 = 0.0;
+            s.x3 = 0.0;
+            s.y3 = 0.0;
+            s.x4 = 0.0;
+            s.y4 = 0.0;
+            // The axe keeps a tremble of at most chopShakePx at the top.
+            if (ore != null && chopShakePx > 0.0 && shudderEnvelope(ore) > 0.0) {
+                ObjectRenderEffects wind = tree.getWindRenderEffects();
+                double dx = 0.5 * (ore.x1 + ore.x2) - (wind != null ? 0.5 * (wind.x1 + wind.x2) : 0.0);
+                Texture tex = tree.getSprite() != null
+                        ? tree.getSprite().getTextureForCurrentFrame(tree.getDir(), tree) : null;
+                double w = tex != null ? Math.max(1.0, tex.getWidth()) : 128.0;
+                s.x1 = dx / 0.18 * chopShakePx / w;
+                s.x2 = s.x1;
+            }
+            chopSaved = ore;
+            chopTree = tree;
+            objectEffectsField.set(tree, s);
+        } catch (Throwable t) {
+            chopOk = false;
+            trace("chop highlight shake disabled: " + t);
+            endChopHighlight();
+        }
+    }
+
+    public static void endChopHighlight() {
+        IsoTree tree = chopTree;
+        if (tree == null) return;
+        chopTree = null;
+        try {
+            objectEffectsField.set(tree, chopSaved);
+        } catch (Throwable t) {
+            chopOk = false;
+            trace("chop highlight restore failed: " + t);
+        }
+        chopSaved = null;
+    }
+
     // Once per visible tree per frame from woven advice; must not throw.
     public static ObjectRenderEffects scaleTreeOre(Texture texture, Texture texture2, ObjectRenderEffects ore) {
         if (ore == null || !enabled || !treeOreScaleOk) return ore;
@@ -953,10 +1079,17 @@ public class WindSwayMod {
             // (axe shudder) travel through the ORE. Chunk bakes build
             // their lists outside the translucent pass and vanilla draws
             // them: they keep the pool sway.
-            ObjectRenderEffects pool = TreeRenderer.active() && FBORenderCell.instance.renderTranslucentOnly
-                    ? poolOf(ore) : null;
+            boolean ours = TreeRenderer.active() && FBORenderCell.instance.renderTranslucentOnly;
+            double shake = shudderEnvelope(ore);
+            if (shake >= 0.0 && !shudderLogged) {
+                shudderLogged = true;
+                trace("first axe shudder: " + (ours ? "drawn as leaf shake" : "left to vanilla")
+                        + " (active=" + TreeRenderer.active()
+                        + " translucent=" + FBORenderCell.instance.renderTranslucentOnly + ")");
+            }
+            ObjectRenderEffects pool = ours ? poolOf(ore) : null;
             if (pool == ore) return null;
-            if (pool == null && f == 1.0) return ore;
+            if (pool == null && f == 1.0 && !(ours && shake >= 0.0)) return ore;
             ObjectRenderEffects scratch = treeOreScratch;
             if (scratch == null) {
                 scratch = ObjectRenderEffects.alloc();
@@ -966,6 +1099,20 @@ public class WindSwayMod {
             if (pool != null) {
                 px1 = pool.x1; py1 = pool.y1; px2 = pool.x2; py2 = pool.y2;
                 px3 = pool.x3; py3 = pool.y3; px4 = pool.x4; py4 = pool.y4;
+            }
+            if (ours && shake >= 0.0) {
+                // The tree renderer turns the shudder into leaf and lobe
+                // shake; the lean from vanilla's +-0.18 would throw the
+                // crown three times as far as a storm.
+                scratch.x1 = 0.0;
+                scratch.y1 = 0.0;
+                scratch.x2 = 0.0;
+                scratch.y2 = 0.0;
+                scratch.x3 = 0.0;
+                scratch.y3 = shake * SHAKE_CODE;
+                scratch.x4 = 0.0;
+                scratch.y4 = shake * SHAKE_CODE;
+                return scratch;
             }
             scratch.x1 = (ore.x1 - px1) * f;
             scratch.y1 = (ore.y1 - py1) * f;
@@ -1025,6 +1172,7 @@ public class WindSwayMod {
         TreeRenderer.requestClear();
         TreeSway.resetClocks();
         firstTreeScaleLogged = false;
+        shudderLogged = false;
         enqueueFailedLogged = false;
         TreeRenderer.pageMissLogged = 0;
         GlTrace.requestDump();

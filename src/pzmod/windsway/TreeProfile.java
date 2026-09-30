@@ -5,11 +5,13 @@ import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.IdentityHashMap;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 import zombie.core.textures.Texture;
+import zombie.iso.IsoTreeJumbo;
 
 // Per-sprite silhouette metrics from tools/tree_profiles.py, rows in frame
 // pixels, plus what the vanilla sheet name says about the tree: species,
@@ -133,6 +135,7 @@ final class TreeProfile {
     // Render thread, per world.
     static void clearCache() {
         cache.clear();
+        wholeCache.clear();
     }
 
     // Any thread.
@@ -217,5 +220,51 @@ final class TreeProfile {
         if (p == null) p = fallback(tex);
         cache.put(tex, p);
         return p;
+    }
+
+    // A cut jumbo is drawn as trunk + treetop (IsoTree.render, the jumbo
+    // registry); both halves share the frame of the whole sprite and take
+    // its profile, so the sway runs on through the cut.
+    private static volatile HashMap<String, String> treetopMain;
+    private static volatile HashSet<String> trunks;
+    private static final IdentityHashMap<Texture, TreeProfile> wholeCache = new IdentityHashMap<>(256);
+    private static final TreeProfile NONE = new TreeProfile(0, 0, 0, false, false, 0, false, -1, 0, 0,
+            SEASON_NONE, false, 1.0f, 0.0f, 0.0f, 0.0f);
+
+    private static synchronized void loadJumbos() {
+        if (treetopMain != null) return;
+        HashMap<String, String> tops = new HashMap<>();
+        HashSet<String> stems = new HashSet<>();
+        try {
+            for (IsoTreeJumbo.TreeDescription d : IsoTreeJumbo.Jumbos.values()) {
+                if (d.main() == null) continue;
+                if (d.treetop() != null) tops.put(d.treetop(), d.main());
+                if (d.trunk() != null) stems.add(d.trunk());
+            }
+        } catch (Throwable t) {
+            System.out.println("[WindSway] jumbo registry unavailable, cut crowns use their own profiles: " + t);
+        }
+        trunks = stems;
+        treetopMain = tops;
+    }
+
+    // Render thread. The whole tree's profile for a treetop half, else null.
+    static TreeProfile wholeOf(Texture tex) {
+        TreeProfile p = wholeCache.get(tex);
+        if (p == null) {
+            if (treetopMain == null) loadJumbos();
+            if (table == null) loadTable();
+            String main = tex.getName() != null ? treetopMain.get(tex.getName()) : null;
+            p = main != null && !tableFailed ? table.get(main) : null;
+            if (p == null) p = NONE;
+            wholeCache.put(tex, p);
+        }
+        return p == NONE ? null : p;
+    }
+
+    static boolean isJumboTrunk(Texture tex) {
+        if (trunks == null) loadJumbos();
+        String name = tex.getName();
+        return name != null && trunks.contains(name);
     }
 }

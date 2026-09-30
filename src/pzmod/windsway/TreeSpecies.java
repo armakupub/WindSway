@@ -25,8 +25,9 @@ final class TreeSpecies {
     static final double[] lobeCell = {1.0, 1.0, 1.0, 1.7, 1.0, 1.0, 1.0, 1.0, 1.6, 1.0, 1.0};
     static final double[] leafCm = {5.0, 8.0, 8.0, 6.0, 8.0, 8.0, 9.0, 7.0, 10.0, 9.0, 13.0};
     // Underside contrast: how much a turning leaf lightens (silvery linden,
-    // pale birch, glaucous maple; leathery leaves never turn).
-    static final double[] flick = {0.0, 0.0, 0.0, 1.0, 0.6, 0.6, 0.6, 0.6, 0.7, 0.8, 0.5};
+    // pale birch, glaucous maple; leathery leaves never turn). Yellowwood and
+    // linden move by clumps (ClumpAtlas); a stronger glitter covered that.
+    static final double[] flick = {0.0, 0.0, 0.0, 1.0, 0.6, 0.6, 0.6, 0.4, 0.7, 0.8, 0.35};
     // Painted leaf size on the XXL sprite in px, by eye; regular and JUMBO
     // paint at about half that.
     static final double[] paintPx = {5.0, 0.0, 0.0, 4.0, 5.0, 6.0, 3.0, 4.0, 4.0, 8.0, 4.0};

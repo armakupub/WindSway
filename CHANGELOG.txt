@@ -1,6 +1,13 @@
 Wind Sway - Changelog
 =====================
 
+0.6.0 - 2026-09-30
+  - Linden and yellowwood crowns move clump by clump, and their leaf flicker is softer.
+  - Fixed: a cut jumbo crown jumped out of its sway, and again when it grew back. Trunk and crown now keep swaying through the cut.
+  - Fixed: the trunk flickered through a jumbo's crown while it was cut away.
+  - Fixed: chopping a tree threw its crown back and forth. The axe now shakes the leaves.
+  - Thanks to JP'TR for the report.
+
 0.5.2 - 2026-09-15
   - Fixed: the mod's wind could set off the game's storm ambience under a clear sky, above all the window rattle indoors, which sounds like a zombie at the frame.
   - The window and door ambience now stays quiet while the mod is the one making the wind, and comes back as soon as real weather takes over.

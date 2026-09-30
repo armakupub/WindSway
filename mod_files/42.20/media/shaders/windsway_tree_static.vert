@@ -30,6 +30,8 @@ layout (location = 7) in vec4 aMisc;
 layout (location = 8) in vec4 aLeaf2;
 // aWood: leaf-mask cell in the atlas (u0, v0, u1, v1), x < 0 = none
 layout (location = 9) in vec4 aWood;
+// aClump: clump-map region in the atlas (u0, v0, u1, v1), x < 0 = none
+layout (location = 10) in vec4 aClump;
 
 uniform mat4 ModelViewProjection;
 uniform vec4 uParams;    // z: leaf cell px
@@ -47,6 +49,7 @@ out vec4 vMisc;
 out vec4 vLeaf2;
 out vec2 vPage;
 out vec4 vWood;
+out vec4 vClump;
 out float vWind;
 
 void main (void)
@@ -74,6 +77,7 @@ void main (void)
 	vLeaf = aLeaf;
 	vMisc = aMisc;
 	vWood = aWood;
+	vClump = aClump;
 
 	vec4 o = ModelViewProjection * vec4(aPosDepth.xyz, 1);
 

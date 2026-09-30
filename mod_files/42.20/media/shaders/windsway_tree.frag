@@ -23,7 +23,8 @@ uniform vec4 uQual;      // perf A/B, 1 = computed, 0 = skipped: x: lobes, y: se
 uniform vec4 uQual2;     // x: leaf shade
 uniform sampler2D MASK;  // leaf-material atlas, quarter sprite px, 1 = leaf, 0 = painted wood
 uniform vec4 uWood;      // x, y: sprite texel to mask-atlas uv (0.25 / atlas size), z: mask strength
-uniform vec4 uDebug;     // x: diagnosis view, 0 = off, 7 = depth-punch (each drawn fragment adds 20% red)
+uniform sampler2D CLUMP; // clump maps: r core weight, gb offset to the clump's centroid (px, 128 = 0), a nod amplitude
+uniform vec4 uDebug;     // x: diagnosis view, 0 = off, 7 = depth-punch (each drawn fragment adds 20% red), 8 = clump cores (borders magenta)
 uniform vec2 uPage;      // uv per texel of the run's page
 varying vec2 vPage;      // x: leaf clock integer cycles mod 64, y: branch clock integer cycles mod 64
 varying float vWind;     // local wind 0..1
@@ -38,6 +39,7 @@ varying vec4 vLeaf;      // x: flutter amplitude u, y: amplitude v, z: v at leaf
 varying vec4 vMisc;      // x: fade alpha, y: bend end (1 = tip, below it a block above), z: lobe amplitude v, w: leaf clock fraction
 varying vec4 vLeaf2;     // x: 1 / flicker cell px (0 = no flicker), y: flicker amplitude, z: snap of the leaf offset to whole texels, w: leaf clock factor of the cluster cell
 varying vec4 vWood;      // leaf-mask cell in the atlas (u0, v0, u1, v1), x < 0 = none
+varying vec4 vClump;     // clump-map region in the atlas (u0, v0, u1, v1), x < 0 = none
 
 float hash(vec2 p)
 {
@@ -94,6 +96,17 @@ vec2 field2(vec2 p, float nm, float q, float mul1, float mul2)
 	vec2 cc = osc2(i + vec2(0.0, 1.0), nm, q, mul1, mul2);
 	vec2 d = osc2(i + vec2(1.0, 1.0), nm, q, mul1, mul2);
 	return mix(mix(a, b, f.x), mix(cc, d, f.x), f.y);
+}
+
+// Broadleaf lobes with the twig octave.
+vec2 lobes(vec2 pb, float nm, float q)
+{
+	vec2 bxy = field2(pb, nm, q, 1.0, 1.125);
+	if (uQual.y > 0.5)
+	{
+		bxy += uTwig.z * field2(pb * uTwig.x + 5.3, nm, q, uTwig.y, uTwig.y * uTwig.w);
+	}
+	return bxy;
 }
 
 float vnoise(vec2 p)
@@ -254,6 +267,31 @@ void main()
 	            * smoothstep(vLeaf.w + soft, vLeaf.w - soft, uy);
 
 	vec2 pix = vPixTexel.xy;
+	// Clump map: the centroid of the painted clump under the lookup, in
+	// field px (clamped to the sprite rect; the map's gutter keeps the
+	// offset exact to the edge), and the core weight. Lobes, nod and shade
+	// run at the centroid, so a clump moves as one piece and only its border
+	// blends to the field at the lookup. Both ride with the bend, or the
+	// border would carry the lean's shift through the lattice.
+	bool clump = vClump.x >= 0.0;
+	vec2 pS = pix;
+	vec2 cF = pix;
+	float core = 0.0;
+	float cAmp = 0.0;
+	float bandC = 0.0;
+	if (clump)
+	{
+		pS = pix - vec2(vUVH.x - ux, vUVH.y - uy) * gTexel.zw;
+		vec2 rectPx = vec2(vRect.y - vRect.x, vRect.w - vRect.z) * gTexel.zw;
+		vec2 t = (vec2(ux, uy) - vec2(vRect.x, vRect.z)) * gTexel.zw / rectPx;
+		vec2 tc = clamp(t, 0.0, 1.0);
+		vec4 cm = texture2D(CLUMP, mix(vClump.xy, vClump.zw, tc));
+		core = cm.r;
+		cAmp = cm.a;
+		cF = pS + (tc - t) * rectPx + cm.gb * 255.0 - 128.0;
+		float vC = uy + (cF.y - pS.y) * gTexel.y;
+		bandC = smoothstep(vLeaf.z - soft, vLeaf.z + soft, vC) * smoothstep(vLeaf.w + soft, vLeaf.w - soft, vC);
+	}
 	float nmB = vPage.y;
 	float qB = vPixTexel.z;
 	float nmL = vPage.x;
@@ -277,11 +315,9 @@ void main()
 		}
 		else
 		{
-			vec2 bxy = field2(pb, nmB, qB, 1.0, 1.125);
-			if (uQual.y > 0.5)
-			{
-				bxy += uTwig.z * field2(pb * uTwig.x + 5.3, nmB, qB, uTwig.y, uTwig.y * uTwig.w);
-			}
+			vec2 bxy = clump
+			         ? mix(lobes(pS * vUVH.w, nmB, qB), lobes(cF * vUVH.w, nmB, qB), core)
+			         : lobes(pb, nmB, qB);
 			bx = bxy.x;
 			by = bxy.y;
 		}
@@ -290,8 +326,12 @@ void main()
 	float lx = 0.0;
 	float ly = 0.0;
 	float flick = 0.0;
-	bool inBand = crown > 0.0;
+	// A clump belongs to the band by its centroid: its margin above the
+	// crown top moves with it.
+	bool inBand = clump ? bandC > 0.0 : crown > 0.0;
 	float band = crown;
+	float nodGate = 1.0;
+	float patch = 1.0;
 	if (uQual.z > 0.5 && inBand)
 	{
 		// Painted wood inside the crown band (trunks, branches between the
@@ -305,32 +345,21 @@ void main()
 			crown *= lm;
 			band *= lm;
 		}
-		float patch = 1.0;
 		if (uMask.y > 0.0 && uQual.w > 0.5)
 		{
-			float m = vnoiseMask(pix * uMask.z + vec2(uMask.x, 0.375 * uMask.x));
+			float m = vnoiseMask((clump ? cF : pix) * uMask.z + vec2(uMask.x, 0.375 * uMask.x));
 			float fl = uMask.w + (1.0 - uMask.w) * uLeaf.z * gTree;
 			float inPatch = smoothstep(0.35, 0.65, m);
 			float dens = mix(1.0, fl + (1.0 - fl) * inPatch, uMask.y);
-			crown *= gateField(pl, dens);
+			nodGate = gateField(clump ? cF * vPixTexel.w : pl, dens);
+			crown *= nodGate;
 			patch = mix(1.0, uFlick2.z + (1.0 - uFlick2.z) * inPatch, uMask.y);
 		}
 		if (vLeaf.x != 0.0 || vLeaf.y != 0.0)
 		{
-			vec2 lxy = field2(pl, nmL, qL, vLeaf2.w, vLeaf2.w * 1.125);
+			vec2 lxy = field2(clump ? cF * vPixTexel.w : pl, nmL, qL, vLeaf2.w, vLeaf2.w * 1.125);
 			lx = lxy.x;
 			ly = lxy.y;
-		}
-		// Leaves turning show their underside: a brightness flicker on
-		// leaf-sized cells, each lit for part of its own cycle, never a
-		// sample offset (fine paint shifted by a fraction of a texel is
-		// heat haze).
-		if (vLeaf2.y > 0.0)
-		{
-			vec2 pf = pix * vLeaf2.x;
-			float lit = smoothstep(uFlick.w - 0.12, uFlick.w + 0.12, field(pf + vec2(17.3, 5.9), nmL, qL, uFlick.x));
-			float densF = mix(uFlick.y, uFlick.z, smoothstep(uFlick2.x, uFlick2.y, gTree)) * patch;
-			flick = lit * gateField(pf + vec2(3.1, 7.7), densF) * vLeaf2.y * band;
 		}
 	}
 	// Tiers pivot at the trunk: a whole crown bobbing reads as heat haze.
@@ -340,13 +369,25 @@ void main()
 		float r = clamp(abs(xrel) / (0.5 * wPx), 0.0, 1.0);
 		tierG = mix(uMode.z, 1.0, pow(max(r, 0.0001), uMode.w));
 	}
-	vec2 dl = vec2(lx * vLeaf.x, ly * vLeaf.y) * crown;
+	vec2 dl = vec2(lx * vLeaf.x, ly * vLeaf.y) * (clump ? core * cAmp * bandC * nodGate : crown);
 	if (vLeaf2.z > 0.0)
 	{
 		vec2 dq = floor(dl * gTexel.zw + 0.5) * gTexel.xy;
 		dl = mix(dl, dq, vLeaf2.z);
 	}
 	vec2 duv = vec2(bx * vBend.w, by * vMisc.z * tierG) * lobeBend + dl;
+	// Leaves turning show their underside: a brightness flicker on
+	// leaf-sized cells, each lit for part of its own cycle, never a sample
+	// offset (fine paint shifted by a fraction of a texel is heat haze). On a
+	// clump map the cells sit on the displaced paint and travel with their
+	// clump; fixed on the quad they glittered over it as a layer of their own.
+	if (uQual.z > 0.5 && inBand && vLeaf2.y > 0.0)
+	{
+		vec2 pf = (clump ? pS - duv * gTexel.zw : pix) * vLeaf2.x;
+		float lit = smoothstep(uFlick.w - 0.12, uFlick.w + 0.12, field(pf + vec2(17.3, 5.9), nmL, qL, uFlick.x));
+		float densF = mix(uFlick.y, uFlick.z, smoothstep(uFlick2.x, uFlick2.y, gTree)) * patch;
+		flick = lit * gateField(pf + vec2(3.1, 7.7), densF) * vLeaf2.y * band;
+	}
 
 	vec2 uv = vec2(ux - duv.x, uy - duv.y);
 	if (uv.x < vRect.x || uv.x > vRect.y || uv.y < vRect.z || uv.y > vRect.w)
@@ -378,6 +419,12 @@ void main()
 		gl_FragColor = vec4(0.2, 0.0, 0.0, 0.004);
 		return;
 	}
+	if (uDebug.x == 8.0 && clump)
+	{
+		vec3 straight = texel.rgb / max(texel.a, 0.001);
+		gl_FragColor = vec4(mix(vec3(1.0, 0.1, 0.6), straight, core) * texel.a, texel.a);
+		return;
+	}
 	vec4 col = vColor;
 	if (uMode.y > 0.5)
 	{
@@ -387,7 +434,8 @@ void main()
 	float shade = 1.0;
 	if (uQual2.x > 0.5 && inBand && uLeaf.x != 0.0)
 	{
-		shade += uLeaf.x * field(pl * 0.5 + 11.3, nmL, qL, uLeaf.w) * crown;
+		shade += uLeaf.x * (clump ? field(cF * vPixTexel.w * 0.5 + 11.3, nmL, qL, uLeaf.w) * core * bandC
+		                          : field(pl * 0.5 + 11.3, nmL, qL, uLeaf.w) * crown);
 	}
 	shade += flick;
 	gl_FragColor = vec4(col.rgb * col.a * texel.rgb * shade, col.a * texel.a);
